@@ -1,0 +1,369 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>官方优选</title>
+<style>
+  :root{
+    --bg:#0f172a; --card:#1e293b; --card2:#273449;
+    --fg:#e2e8f0; --muted:#94a3b8; --line:#334155;
+    --accent:#38bdf8; --accent2:#0ea5e9; --ok:#34d399; --err:#f87171; --warn:#fbbf24;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0; padding:24px 16px 48px;
+    font-family:"Segoe UI","Microsoft YaHei",system-ui,-apple-system,sans-serif;
+    background:linear-gradient(180deg,var(--bg),#131c33 60%,#0d1424);
+    color:var(--fg); min-height:100vh;
+  }
+  .wrap{max-width:760px;margin:0 auto}
+  header{display:flex;align-items:center;gap:12px;margin-bottom:22px}
+  header h1{font-size:22px;margin:0;letter-spacing:1px}
+  .badge{
+    font-size:11px;padding:3px 9px;border-radius:99px;
+    background:rgba(56,189,248,.15);color:var(--accent);
+    border:1px solid rgba(56,189,248,.35);
+  }
+  .ver{font-size:11px;color:var(--muted);margin-left:auto}
+  .card{
+    background:var(--card);border:1px solid var(--line);
+    border-radius:14px;padding:18px;margin-bottom:16px;
+  }
+  .card h2{
+    font-size:14px;margin:0 0 14px;color:var(--muted);
+    font-weight:600;letter-spacing:.5px;
+  }
+  .row{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:14px}
+  .row:last-child{margin-bottom:0}
+  label.lbl{font-size:13px;color:var(--muted);min-width:76px}
+  .seg{display:flex;border:1px solid var(--line);border-radius:9px;overflow:hidden}
+  .seg button{
+    background:transparent;border:0;color:var(--muted);
+    padding:8px 20px;font-size:13px;cursor:pointer;transition:.15s;
+  }
+  .seg button.on{background:var(--accent);color:#05202e;font-weight:600}
+  input[type=number]{
+    width:92px;background:var(--card2);border:1px solid var(--line);
+    color:var(--fg);border-radius:8px;padding:8px 10px;font-size:14px;
+  }
+  .unit{font-size:13px;color:var(--muted)}
+  .btns{display:flex;gap:10px;flex-wrap:wrap}
+  button.act{
+    flex:1;min-width:130px;border:0;border-radius:11px;padding:13px;
+    font-size:15px;font-weight:600;cursor:pointer;transition:.15s;
+  }
+  button.act:disabled{opacity:.45;cursor:not-allowed}
+  .primary{background:linear-gradient(135deg,var(--accent),var(--accent2));color:#05202e}
+  .ghost{background:var(--card2);color:var(--fg);border:1px solid var(--line)!important}
+  #progress{
+    font-size:13px;color:var(--muted);min-height:20px;
+    font-family:Consolas,"Courier New",monospace;word-break:break-all;
+  }
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px}
+  .kv{background:var(--card2);border-radius:10px;padding:12px}
+  .kv .k{font-size:11px;color:var(--muted);margin-bottom:5px}
+  .kv .v{font-size:17px;font-weight:600}
+  .ipbox{
+    margin-top:14px;background:var(--card2);border:1px dashed var(--line);
+    border-radius:10px;padding:14px;display:flex;align-items:center;
+    justify-content:space-between;gap:12px;
+  }
+  .ipbox code{font-size:17px;color:var(--accent);font-family:Consolas,monospace;word-break:break-all}
+  .copy{
+    background:var(--accent);border:0;color:#05202e;border-radius:7px;
+    padding:7px 15px;font-size:13px;cursor:pointer;font-weight:600;white-space:nowrap;
+  }
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th,td{text-align:left;padding:9px 8px;border-bottom:1px solid var(--line)}
+  th{color:var(--muted);font-weight:600;font-size:11px}
+  td.ip{font-family:Consolas,monospace;color:var(--accent);cursor:pointer}
+  td.ip:hover{text-decoration:underline}
+  .empty{color:var(--muted);font-size:13px;text-align:center;padding:20px}
+  .toast{
+    position:fixed;left:50%;bottom:28px;transform:translateX(-50%);
+    background:var(--card2);border:1px solid var(--line);color:var(--fg);
+    padding:11px 20px;border-radius:9px;font-size:13px;
+    opacity:0;pointer-events:none;transition:.25s;
+  }
+  .toast.show{opacity:1}
+  .err{color:var(--err)}
+  .warn{color:var(--warn)}
+  .hint{font-size:11px;color:var(--muted);margin-top:8px;line-height:1.6}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>官方优选</h1>
+    <span class="badge">桌面版</span>
+    <span class="ver" id="ver"></span>
+  </header>
+
+  <div class="card">
+    <h2>扫描配置</h2>
+    <div class="row">
+      <label class="lbl">IP 协议</label>
+      <div class="seg" id="segIP">
+        <button data-v="4" class="on">IPv4</button>
+        <button data-v="6">IPv6</button>
+      </div>
+    </div>
+    <div class="row">
+      <label class="lbl">连接验证</label>
+      <div class="seg" id="segTLS">
+        <button data-t="1">TLS</button>
+        <button data-t="0" class="on">关闭</button>
+      </div>
+    </div>
+    <div class="row">
+      <label class="lbl">期望带宽</label>
+      <input type="number" id="bw" value="1" min="1" max="1000">
+      <span class="unit">Mbps</span>
+    </div>
+    <div class="btns">
+      <button class="act primary" id="btnScan">开始扫描</button>
+      <button class="act ghost" id="btnCancel" disabled>取消</button>
+      <button class="act ghost" id="btnUpdate">更新数据</button>
+    </div>
+    <div class="hint">
+      候选 IP 从 Cloudflare 官方子网列表随机生成，大部分是不通的，
+      所以扫描时会反复换批次。填的带宽越高，需要的时间越长（最多 10 轮）。
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>扫描状态</h2>
+    <div id="progress">就绪</div>
+  </div>
+
+  <div class="card" id="resultCard" style="display:none">
+    <h2>扫描结果</h2>
+    <div class="grid">
+      <div class="kv"><div class="k">期望带宽</div><div class="v" id="rBw">-</div></div>
+      <div class="kv"><div class="k">实测带宽</div><div class="v" id="rReal">-</div></div>
+      <div class="kv"><div class="k">峰值速度</div><div class="v" id="rSpeed">-</div></div>
+      <div class="kv"><div class="k">往返延迟</div><div class="v" id="rLat">-</div></div>
+      <div class="kv"><div class="k">数据中心</div><div class="v" id="rDC">-</div></div>
+      <div class="kv"><div class="k">总用时</div><div class="v" id="rTime">-</div></div>
+    </div>
+    <div class="ipbox">
+      <code id="rIP">-</code>
+      <button class="copy" id="btnCopy">复制</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>历史记录 <span style="font-weight:400">· 最近 10 条</span></h2>
+    <div id="histBox"><div class="empty">暂无历史记录</div></div>
+    <div class="btns" style="margin-top:14px">
+      <button class="act ghost" id="btnClearHist">清空历史</button>
+      <button class="act ghost" id="btnClearCache">清除缓存</button>
+    </div>
+    <div class="hint" id="footHint">点击 IP 可复制</div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+let useV4 = true, useTLS = false, polling = null;
+
+function toast(msg){
+  const t = document.getElementById('toast');
+  t.textContent = msg; t.classList.add('show');
+  clearTimeout(t._h); t._h = setTimeout(()=>t.classList.remove('show'), 2000);
+}
+
+async function copyText(s){
+  try{ await navigator.clipboard.writeText(s); toast('已复制 ' + s); }
+  catch(e){
+    // http 页面或旧浏览器下 clipboard API 不可用，退回 execCommand
+    const ta=document.createElement('textarea');
+    ta.value=s; document.body.appendChild(ta); ta.select();
+    document.execCommand('copy'); ta.remove(); toast('已复制 ' + s);
+  }
+}
+
+// 用户可控字段一律转义，避免注入
+function esc(s){
+  return String(s==null?'':s).replace(/[&<>"']/g, c=>(
+    {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+// ---------- 分段控件 ----------
+
+document.querySelectorAll('#segIP button').forEach(b=>{
+  b.onclick=()=>{
+    if(b.disabled) return;
+    document.querySelectorAll('#segIP button').forEach(x=>x.classList.remove('on'));
+    b.classList.add('on'); useV4 = b.dataset.v === '4';
+  };
+});
+document.querySelectorAll('#segTLS button').forEach(b=>{
+  b.onclick=()=>{
+    if(b.disabled) return;
+    document.querySelectorAll('#segTLS button').forEach(x=>x.classList.remove('on'));
+    b.classList.add('on'); useTLS = b.dataset.t === '1';
+  };
+});
+
+// ---------- 运行状态 ----------
+
+function setBusy(on, label){
+  document.getElementById('btnScan').disabled = on;
+  document.getElementById('btnUpdate').disabled = on;
+  document.getElementById('btnClearCache').disabled = on;
+  document.getElementById('btnCancel').disabled = !on;
+  document.getElementById('btnScan').textContent = on ? (label || '扫描中…') : '开始扫描';
+  document.querySelectorAll('#segIP button,#segTLS button').forEach(b=>b.disabled = on);
+  document.getElementById('bw').disabled = on;
+}
+
+document.getElementById('btnScan').onclick = async ()=>{
+  const el = document.getElementById('bw');
+  let bw = parseInt(el.value, 10);
+  if(!Number.isFinite(bw) || bw < 1) bw = 1;
+  if(bw > 1000) bw = 1000;   // 与核心层 maxBandwidthMbps 一致
+  el.value = bw;
+
+  const r = await fetch('/api/scan',{
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({v4: useV4, useTLS: useTLS, bandwidth: bw})
+  }).then(r=>r.json()).catch(()=>({error:'无法连接本地服务'}));
+  if(r.error){ toast(r.error); return; }
+
+  setBusy(true);
+  document.getElementById('resultCard').style.display='none';
+  document.getElementById('progress').textContent = '正在初始化...';
+  startPoll();
+};
+
+document.getElementById('btnCancel').onclick = ()=>{
+  document.getElementById('btnCancel').disabled = true;
+  document.getElementById('progress').textContent = '正在取消扫描...';
+  fetch('/api/cancel',{method:'POST'});
+};
+
+document.getElementById('btnUpdate').onclick = async ()=>{
+  const r = await fetch('/api/update-data',{method:'POST'})
+    .then(r=>r.json()).catch(()=>({error:'无法连接本地服务'}));
+  if(r.error){ toast(r.error); return; }
+  setBusy(true, '更新中…');
+  startPoll();
+};
+
+document.getElementById('btnClearCache').onclick = async ()=>{
+  const r = await fetch('/api/clear-cache',{method:'POST'})
+    .then(r=>r.json()).catch(()=>({error:'无法连接本地服务'}));
+  if(r.error){ toast(r.error); return; }
+  toast('缓存已清除，下次扫描会重新下载');
+};
+
+document.getElementById('btnClearHist').onclick = async ()=>{
+  await fetch('/api/history',{method:'DELETE'});
+  loadHist(); toast('历史已清空');
+};
+
+document.getElementById('btnCopy').onclick = ()=>{
+  const ip = document.getElementById('rIP').textContent;
+  if(ip && ip !== '-') copyText(ip);
+};
+
+function startPoll(){
+  if(polling) return;
+  polling = setInterval(async ()=>{
+    const s = await fetch('/api/status').then(r=>r.json()).catch(()=>null);
+    if(!s) return;
+    document.getElementById('progress').textContent = s.progress || '就绪';
+    if(!s.scanning){
+      clearInterval(polling); polling = null; setBusy(false);
+      if(s.result) showResult(JSON.parse(s.result));
+      // 数据更新失败时给出原因，不能只是静悄悄地结束
+      else if(s.notice){
+        document.getElementById('progress').innerHTML =
+          '<span class="err">' + esc(s.notice) + '</span>';
+      }
+      loadHist();
+    }
+  }, 500);
+}
+
+function showResult(r){
+  const card = document.getElementById('resultCard');
+  const prog = document.getElementById('progress');
+
+  // 用户主动取消：只提示取消，不能显示成"未找到"
+  if(r.cancelled){
+    prog.textContent = r.error || '扫描已取消';
+    card.style.display = 'none';
+    return;
+  }
+
+  // 一个都没测出来：没有结果可展示，只给说明
+  if(!r.ip){
+    prog.innerHTML = '<span class="err">' + esc(r.error || '未找到可用 IP') + '</span>';
+    card.style.display = 'none';
+    return;
+  }
+
+  card.style.display = 'block';
+  // 有结果但未达标：IP 仍然可用，结果和说明同时给出
+  if(r.belowTarget && r.error){
+    prog.innerHTML = '<span class="warn">' + esc(r.error) + '</span>';
+  } else if(r.error){
+    prog.innerHTML = '<span class="err">' + esc(r.error) + '</span>';
+  }
+
+  document.getElementById('rIP').textContent    = r.ip;
+  document.getElementById('rBw').textContent    = r.bandwidth ? r.bandwidth+' Mbps' : '-';
+  document.getElementById('rReal').textContent  = r.realBandwidth ? r.realBandwidth+' Mbps' : '-';
+  document.getElementById('rSpeed').textContent = r.maxSpeed ? r.maxSpeed+' kB/s' : '-';
+  document.getElementById('rLat').textContent   = r.latencyMs ? r.latencyMs+' ms' : '-';
+  document.getElementById('rDC').textContent    = r.dataCenter || '-';
+  document.getElementById('rTime').textContent  = r.elapsed ? r.elapsed+' 秒' : '-';
+}
+
+async function loadHist(){
+  const items = await fetch('/api/history').then(r=>r.json()).catch(()=>[]);
+  const box = document.getElementById('histBox');
+  if(!items.length){ box.innerHTML = '<div class="empty">暂无历史记录</div>'; return; }
+  let h = '<table><thead><tr><th>IP</th><th>实测</th><th>峰值</th><th>延迟</th>'
+        + '<th>数据中心</th><th>时间</th></tr></thead><tbody>';
+  for(const it of items){
+    h += '<tr><td class="ip" data-ip="'+esc(it.ip)+'">'+esc(it.ip)+'</td>'
+       + '<td>'+(it.realBandwidth||0)+' Mbps</td>'
+       + '<td>'+(it.maxSpeed||0)+' kB/s</td>'
+       + '<td>'+(it.latencyMs||0)+' ms</td>'
+       + '<td>'+esc(it.dataCenter||'-')+'</td>'
+       + '<td>'+esc(it.time||'-')+'</td></tr>';
+  }
+  box.innerHTML = h + '</tbody></table>';
+  box.querySelectorAll('td.ip').forEach(td=>{
+    td.onclick = ()=> copyText(td.dataset.ip);
+  });
+}
+
+async function loadMeta(){
+  const m = await fetch('/api/meta').then(r=>r.json()).catch(()=>null);
+  if(!m) return;
+  if(m.version) document.getElementById('ver').textContent = 'v' + m.version;
+  if(m.dataDir){
+    document.getElementById('footHint').textContent =
+      '点击 IP 可复制 · 数据目录 ' + m.dataDir;
+  }
+}
+
+// 页面可能在扫描进行中被刷新，先探一次状态再决定要不要接着轮询
+async function init(){
+  loadMeta();
+  loadHist();
+  const s = await fetch('/api/status').then(r=>r.json()).catch(()=>null);
+  if(s && s.scanning){ setBusy(true); startPoll(); }
+  else if(s && s.result){ showResult(JSON.parse(s.result)); }
+}
+
+init();
+</script>
+</body>
+</html>

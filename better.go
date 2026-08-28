@@ -1,0 +1,243 @@
+package better
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"strings"
+)
+
+// ScanResult 扫描结果
+type ScanResult struct {
+	IP            string `json:"ip"`
+	Bandwidth     int    `json:"bandwidth"`     // 期望带宽 Mbps
+	RealBandwidth int    `json:"realBandwidth"` // 实测带宽 Mbps
+	MaxSpeed      int    `json:"maxSpeed"`      // 峰值速度 kB/s
+	LatencyMs     int    `json:"latencyMs"`
+	DataCenter    string `json:"dataCenter"`
+	Elapsed       int    `json:"elapsed"` // 总计用时 秒
+	// Cancelled 区分「用户主动取消」与「没找到」。
+	// 原版两者都返回空 IP，界面只能显示"未找到"，会误导用户。
+	Cancelled bool `json:"cancelled"`
+	// BelowTarget 有结果但未达到期望带宽。此时 IP 仍然可用，
+	// 界面应该同时显示结果和提示，而不是只给一个错误。
+	BelowTarget bool   `json:"belowTarget"`
+	Error       string `json:"error"`
+}
+
+// Version 返回核心层版本号，供界面显示
+func Version() string { return libVersion }
+
+const libVersion = "1.1"
+
+// SetCacheDir 设置缓存目录（Android 应用数据目录）
+// gomobile 必须显式设置，Android 下通常设为 Context.getFilesDir()
+func SetCacheDir(dir string) {
+	dataDir = dir
+}
+
+// GetProgress 返回当前进度描述，供 Android 端轮询
+func GetProgress() string {
+	progressMu.Lock()
+	defer progressMu.Unlock()
+	return progress
+}
+
+func setProgress(s string) {
+	progressMu.Lock()
+	progress = s
+	progressMu.Unlock()
+}
+
+// CancelScan 取消正在进行的任务（扫描或数据更新），立即中断所有网络操作
+func CancelScan() {
+	cancelMu.Lock()
+	if cancelCancel != nil {
+		cancelCancel()
+	}
+	cancelMu.Unlock()
+	// 措辞要中性：数据更新也走这个取消通道，
+	// 写成"已取消扫描"会让用户以为点错了按钮。
+	// 具体是取消了什么，由各任务结束时的收尾消息覆盖。
+	setProgress("正在取消...")
+}
+
+func isCancelled() bool {
+	cancelMu.Lock()
+	defer cancelMu.Unlock()
+	if cancelCtx == nil {
+		return false
+	}
+	select {
+	case <-cancelCtx.Done():
+		return true
+	default:
+		return false
+	}
+}
+
+// BeginTask 在把任务派发到后台线程之前同步调用一次。
+//
+// 为什么需要：GetIPs / UpdateData 会在后台线程里重建取消上下文。
+// 如果用户在「点了开始」和「任务真正跑起来」之间点取消，
+// 那次取消会被重建动作抹掉，取消按钮看起来就是失灵了。
+// 先在前台 BeginTask()，这段窗口里到达的取消就能保留下来。
+func BeginTask() {
+	cancelMu.Lock()
+	defer cancelMu.Unlock()
+	cancelCtx, cancelCancel = context.WithCancel(context.Background())
+	taskRequested = true
+}
+
+// enterTask 任务真正开始时取用取消上下文。
+// BeginTask 已经建好就沿用（保留这期间到达的取消），否则新建一个。
+// 后者覆盖「上一个任务留下的已取消上下文」，避免旧取消泄漏到新任务。
+func enterTask() {
+	cancelMu.Lock()
+	defer cancelMu.Unlock()
+	if !taskRequested {
+		cancelCtx, cancelCancel = context.WithCancel(context.Background())
+	}
+	taskRequested = false
+}
+
+// GetIPs 运行 Cloudflare IP 优选，返回结果 JSON
+// v4: true=IPv4 false=IPv6
+// useTLS: 是否启用 TLS 握手
+// bandwidth: 期望带宽（Mbps），设为 0 则使用默认 1 Mbps
+// 阻塞调用，需在后台线程执行。
+// 界面派发到后台线程之前应先调 BeginTask()，否则这段窗口里的取消会丢。
+func GetIPs(v4 bool, useTLS bool, bandwidth int) string {
+	enterTask()
+	setProgress("正在初始化...")
+
+	ipType := 4
+	if !v4 {
+		ipType = 6
+	}
+
+	if bandwidth <= 0 {
+		bandwidth = 1
+	}
+	// 带宽上限保护：填个 999999 除了让扫描永远达不到目标、
+	// 白跑满 10 轮之外没有任何意义
+	if bandwidth > maxBandwidthMbps {
+		bandwidth = maxBandwidthMbps
+	}
+
+	// 转为 kB/s
+	speedTarget := bandwidth * 128
+
+	startTime := timeNow()
+
+	out := cloudflareTest(ipType, useTLS, defaultTaskNum, speedTarget)
+
+	realBandwidth := out.MaxSpeed / 128
+	elapsed := int(timeSince(startTime).Seconds())
+
+	result := ScanResult{
+		IP:            out.IP,
+		Bandwidth:     bandwidth,
+		RealBandwidth: realBandwidth,
+		MaxSpeed:      out.MaxSpeed,
+		LatencyMs:     out.LatencyMs,
+		DataCenter:    out.DataCenter,
+		Elapsed:       elapsed,
+	}
+
+	switch {
+	case isCancelled():
+		// 用户主动取消：不能报"未找到"，否则界面会误导用户
+		result.Cancelled = true
+		result.IP = ""
+		result.Error = "扫描已取消"
+		setProgress("扫描已取消")
+
+	case out.IP == "":
+		// 区分「全部子网测完」与「轮次用尽」，不谎报轮数
+		if out.PoolExhausted {
+			result.Error = fmt.Sprintf("%d 个子网已全部测过，没有一个 IP 能连通（用时 %d 秒）",
+				out.PoolSize, elapsed)
+		} else {
+			result.Error = fmt.Sprintf("已测试 %d 个子网（共 %d 轮），未找到可用 IP（用时 %d 秒）",
+				out.Tested, out.RoundsRun, elapsed)
+		}
+		setProgress(fmt.Sprintf("扫描结束，用时 %d 秒", elapsed))
+
+	case out.BelowTarget:
+		// 有结果但未达标：IP 仍然可用，同时给出说明
+		result.BelowTarget = true
+		if out.PoolExhausted {
+			result.Error = fmt.Sprintf("%d 个子网已全部测过，均未达到 %d Mbps，返回最佳结果 %d Mbps",
+				out.PoolSize, bandwidth, realBandwidth)
+		} else {
+			result.Error = fmt.Sprintf("已测试 %d 个子网（共 %d 轮）未达到 %d Mbps，返回最佳结果 %d Mbps",
+				out.Tested, out.RoundsRun, bandwidth, realBandwidth)
+		}
+		setProgress(fmt.Sprintf("扫描完成，用时 %d 秒", elapsed))
+
+	default:
+		setProgress(fmt.Sprintf("扫描完成，用时 %d 秒", elapsed))
+	}
+
+	b, _ := json.Marshal(result)
+	return string(b)
+}
+
+// dataFiles 需要下载与缓存的数据文件
+var dataFiles = []string{"locations.json", "ips-v4.txt", "ips-v6.txt", "url.txt"}
+
+// UpdateData 重新下载所有数据文件（清空缓存后重新下载）。
+// 返回空字符串表示成功，否则是给用户看的失败原因。
+// 返回值不能省：界面无法从 void 里判断成败，只能无条件报"更新完成"，
+// 那就是谎报。
+//
+// 阻塞调用，需在后台线程执行。界面派发前应先调 BeginTask()。
+func UpdateData() string {
+	// 必须取一个干净的取消上下文。否则用户「取消扫描 → 点更新数据」时，
+	// downloadAllData 会在第一个 isCancelled() 检查处直接返回，
+	// 但进度照样显示"数据更新完成" —— 删掉了旧文件却什么都没下载，
+	// 下次扫描才发现数据没了。
+	enterTask()
+
+	setProgress("正在更新数据...")
+	for _, f := range dataFiles {
+		removeFile(dataPath(f))
+	}
+	initLocations()
+
+	// 不能无条件报成功：下载失败时 downloadAllData 已经写了错误原因，
+	// 这里再盖一层"更新完成"就是谎报。
+	if isCancelled() {
+		setProgress("数据更新已取消")
+		return "数据更新已取消"
+	}
+	if missing := missingDataFiles(); len(missing) > 0 {
+		msg := fmt.Sprintf("数据更新未完成，缺少 %s（检查网络后重试）",
+			strings.Join(missing, "、"))
+		setProgress(msg)
+		return msg
+	}
+	setProgress("数据更新完成")
+	return ""
+}
+
+// missingDataFiles 返回仍然缺失的数据文件名
+func missingDataFiles() []string {
+	var missing []string
+	for _, f := range dataFiles {
+		if !fileExists(dataPath(f)) {
+			missing = append(missing, f)
+		}
+	}
+	return missing
+}
+
+// ClearCache 清除缓存的数据文件
+func ClearCache() {
+	setProgress("正在清除缓存...")
+	for _, f := range dataFiles {
+		removeFile(dataPath(f))
+	}
+	setProgress("缓存已清除")
+}

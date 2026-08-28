@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="primary">#65A1FF</color>
+    <color name="primary_pressed">#4F86DD</color>
+    <color name="primary_dark">#071A35</color>
+    <color name="primary_disabled">#445066</color>
+    <color name="accent">#FF9A62</color>
+    <color name="success">#45C48A</color>
+    <color name="warning">#F5A84A</color>
+    <!-- 夜间模式必须单独给 danger：亮色模式的 #D92D20 是深红，
+         放在深灰背景上对比度不足，取消按钮和删除按钮都会看不清 -->
+    <color name="danger">#FF6B5E</color>
+    <color name="page_background">#101318</color>
+    <color name="card_background">#191D24</color>
+    <color name="surface_raised">#202632</color>
+    <color name="surface_muted">#252D3A</color>
+    <color name="surface_input">#151A22</color>
+    <color name="text_primary">#F4F7FB</color>
+    <color name="text_secondary">#B0BBCB</color>
+    <color name="text_muted">#7F8A9B</color>
+    <color name="text_on_primary">#FFFFFF</color>
+    <color name="divider">#313A49</color>
+    <color name="result_background">#172235</color>
+    <color name="result_border">#2A4F89</color>
+    <color name="metric_background">#151A22</color>
+    <color name="success_text">#45C48A</color>
+    <color name="ic_launcher_background">#FFFFFF</color>
+</resources>

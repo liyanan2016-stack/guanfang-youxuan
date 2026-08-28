@@ -1,0 +1,27 @@
+# 构建产物
+android/app/build/
+android/build/
+android/.gradle/
+android/local.properties
+android/app/libs/*.aar
+android/app/libs/*.jar
+.gradle/
+.cache/
+.tmp/
+dist/
+
+# 签名材料：泄漏后别人可以做出能覆盖安装你的 App 的版本
+*.jks
+*.keystore
+android/store.properties
+
+# 数据源缓存（体积大且可随时重新下载）
+ips-v4.txt
+ips-v6.txt
+locations.json
+url.txt
+
+*.apk
+*.exe
+*.log
+.DS_Store
