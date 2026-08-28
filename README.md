@@ -12,8 +12,8 @@ Cloudflare 官方 IP 段优选工具（Android + Windows/Linux 桌面版）。
 
 到 [Releases](../../releases) 页下载：
 
-- **Android**：`官方优选-v1.1-universal.apk`（通用，体积大）
-  或 `官方优选-v1.1-arm64-v8a.apk`（2016 年后的手机，省一半空间）
+- **Android**：`guanfang-youxuan-v1.1-universal.apk`（通用，体积大）
+  或 `guanfang-youxuan-v1.1-arm64-v8a.apk`（2016 年后的手机，省一半空间）
 - **Windows**：`guanfang-youxuan-v1.1-windows-amd64.exe`
 - **Linux**：`guanfang-youxuan-v1.1-linux-amd64`
 
