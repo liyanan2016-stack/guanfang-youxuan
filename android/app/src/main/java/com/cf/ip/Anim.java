@@ -166,26 +166,35 @@ final class Anim {
     }
 
     /**
-     * 给按钮装上"按下缩小、松手回弹"。
+     * 给可点元素装上"按下缩小 + 变暗，松手回弹"。
      *
      * <p>用 OnTouchListener 而不是 StateListAnimator：后者要单独写一份
      * XML 动画资源，而且和布局里已有的 {@code stateListAnimator="@null"}
      * （为了去掉默认投影而设的）冲突。
      *
+     * <p>同时压 alpha 而不是只做缩放：玻璃元素是半透明的，单靠 3% 的尺寸
+     * 变化在浅色背景上几乎看不出来，配合一点变暗才有明确的"按住了"反馈。
+     *
+     * <p>ACTION_UP 和 ACTION_CANCEL 都要还原，否则手指滑出控件外再松手
+     * 会把按钮永久留在缩小变暗的状态。
+     *
      * <p>返回 false 让事件继续往下传，OnClickListener 照常触发。
+     *
+     * @param scale 按下时缩到多少。主按钮给 0.97（大面积元素缩太多会晃眼），
+     *              小控件可以给 0.93。
      */
-    static void attachPressScale(final View view) {
+    static void attachPressScale(final View view, final float scale) {
         view.setOnTouchListener((v, ev) -> {
             switch (ev.getActionMasked()) {
                 case android.view.MotionEvent.ACTION_DOWN:
                     v.animate().cancel();
-                    v.animate().scaleX(0.97f).scaleY(0.97f)
+                    v.animate().scaleX(scale).scaleY(scale).alpha(0.82f)
                             .setDuration(DUR_TAP).setInterpolator(EASE_OUT).start();
                     break;
                 case android.view.MotionEvent.ACTION_UP:
                 case android.view.MotionEvent.ACTION_CANCEL:
                     v.animate().cancel();
-                    v.animate().scaleX(1f).scaleY(1f)
+                    v.animate().scaleX(1f).scaleY(1f).alpha(1f)
                             .setDuration(DUR_TAP * 2).setInterpolator(EASE_OUT_BACK).start();
                     break;
                 default:
@@ -193,6 +202,45 @@ final class Anim {
             }
             return false;
         });
+    }
+
+    /** 默认缩放量的重载。 */
+    static void attachPressScale(final View view) {
+        attachPressScale(view, 0.97f);
+    }
+
+    /**
+     * 批量装配按压反馈。
+     *
+     * <p>逐个写 attachPressScale 会漏——这个界面上可点元素有十几个，
+     * 漏掉的那几个按下去没反应，用户会以为点歪了。
+     */
+    static void attachPressScale(float scale, View... views) {
+        for (View v : views) {
+            if (v != null) attachPressScale(v, scale);
+        }
+    }
+
+    /**
+     * 横向滑入 + 淡入。用于分页切换。
+     *
+     * <p>位移只给 20dp 左右。整屏宽度的滑动（那种真正的 pager 效果）需要
+     * 两个页面同时在场、一个滑出一个滑入；这里两个 ScrollView 是
+     * visibility 互斥的，硬做全宽滑动会看到一片空白扫过去。20dp 的
+     * 短距离位移足够交代"换了一页"，也不会露出空白。
+     *
+     * @param dxPx 起始横向偏移，正数=从右边进，负数=从左边进
+     */
+    static void slideIn(View view, float dxPx) {
+        view.setVisibility(View.VISIBLE);
+        view.setAlpha(0f);
+        view.setTranslationX(dxPx);
+        view.animate()
+                .alpha(1f)
+                .translationX(0f)
+                .setDuration(DUR_FADE)
+                .setInterpolator(EASE_OUT)
+                .start();
     }
 
     /** 点击回弹。chip 和导航项用，给一个"按到了"的实感。 */
@@ -233,6 +281,45 @@ final class Anim {
                     .setInterpolator(EASE_OUT)
                     .start();
         }
+    }
+
+    /**
+     * 分段控件里选中项的切换反馈。
+     *
+     * <p>新选中的那个轻微放大再回落。这比单纯换个背景色明显得多——
+     * 三个 44dp 的方块只靠颜色变化，眼睛容易看不出到底换没换，
+     * 而这正是「输出数量」那个 bug 在真机上难以察觉的原因之一。
+     */
+    static void segmentSelect(View view) {
+        if (view == null) return;
+        view.animate().cancel();
+        view.setScaleX(0.9f);
+        view.setScaleY(0.9f);
+        view.animate()
+                .scaleX(1f).scaleY(1f)
+                .setDuration(DUR_TAP * 2)
+                .setInterpolator(EASE_OUT_BACK)
+                .start();
+    }
+
+    /**
+     * 淡入淡出地切换一个 View 的可见性。
+     *
+     * <p>用于顶栏分隔线这类"随滚动出现/消失"的装饰：直接改 visibility
+     * 会让线突然闪出来，比没有线更扎眼。
+     *
+     * <p>已经是目标状态时直接返回，否则每帧滚动回调都会重启一次动画，
+     * alpha 永远停在中间值。
+     */
+    static void fadeTo(View view, boolean show) {
+        if (view == null) return;
+        float target = show ? 1f : 0f;
+        if (view.getAlpha() == target) return;
+        view.animate().cancel();
+        view.animate().alpha(target)
+                .setDuration(DUR_FADE)
+                .setInterpolator(EASE_OUT)
+                .start();
     }
 
     /** 数值刷新时的轻微脉冲，用于结果指标从旧值换成新值。 */

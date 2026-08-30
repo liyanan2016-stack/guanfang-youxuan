@@ -86,8 +86,9 @@ public class MainActivity extends AppCompatActivity {
 
     // 三个分页与底部导航。分页靠 visibility 切换而不是重建视图：
     // 切页不能丢掉已填的输入和滚动位置，更不能打断正在跑的扫描。
-    private View pageScan;
-    private View pageHistory;
+    private SpringScrollView pageScan;
+    private SpringScrollView pageHistory;
+    private View topBarDivider;
     private View navScan;
     private View navHistory;
     private TextView txtPageTitle;
@@ -189,15 +190,26 @@ public class MainActivity extends AppCompatActivity {
         layoutMoreList = findViewById(R.id.layoutMoreList);
         pageScan = findViewById(R.id.pageScan);
         pageHistory = findViewById(R.id.pageHistory);
+        topBarDivider = findViewById(R.id.topBarDivider);
+
+        // 内容滚起来之后顶栏才浮出分隔线。停在顶部时不画线 ——
+        // 玻璃是连续的一层，硬边界会把顶栏和内容切成两块。
+        SpringScrollView.OnScrollProgressListener divider =
+                scrollY -> Anim.fadeTo(topBarDivider, scrollY > dp(4));
+        pageScan.setOnScrollProgressListener(divider);
+        pageHistory.setOnScrollProgressListener(divider);
         navScan = findViewById(R.id.navScan);
         navHistory = findViewById(R.id.navHistory);
         txtPageTitle = findViewById(R.id.txtPageTitle);
+        // 导航项：按住整块变暗缩小，切换成功后图标再弹一下。
+        // 只做点击后回弹的话，按住不放期间毫无反馈。
+        Anim.attachPressScale(0.94f, navScan, navHistory);
         navScan.setOnClickListener(v -> {
-            Anim.tapBounce(v.findViewById(R.id.navScanIcon));
+            if (currentTab != 0) Anim.segmentSelect(v.findViewById(R.id.navScanIcon));
             selectTab(0);
         });
         navHistory.setOnClickListener(v -> {
-            Anim.tapBounce(v.findViewById(R.id.navHistoryIcon));
+            if (currentTab != 1) Anim.segmentSelect(v.findViewById(R.id.navHistoryIcon));
             selectTab(1);
         });
         layoutHistoryList = findViewById(R.id.layoutHistoryList);
@@ -219,7 +231,11 @@ public class MainActivity extends AppCompatActivity {
 
         txtThemeMode.setOnClickListener(v -> {
             // 图标自转半圈：三态循环（跟随系统/浅色/深色）光靠换图标不明显，
-            // 加个旋转让人确认自己点到了
+            // 加个旋转让人确认自己点到了。
+            //
+            // 用 rotationBy 而不是 animate().rotation()：attachPressScale 会
+            // 在同一个 View 上跑 scale 动画，两者共用 ViewPropertyAnimator，
+            // 但 rotation 和 scale 是不同属性，不会互相取消。
             v.animate().rotationBy(180f).setDuration(Anim.DUR_COLLAPSE)
                     .setInterpolator(Anim.EASE_OUT).start();
             cycleThemeMode();
@@ -242,17 +258,28 @@ public class MainActivity extends AppCompatActivity {
 
         // 扫描与取消分成两个按钮。原来共用一个按钮，扫描中按钮变成"停止扫描"，
         // 用户想再点一次开始扫描时容易误取消，取消完还要再点一次才开始。
-        Anim.attachPressScale(btnScan);
+        //
+        // 按压反馈一次性批量装配，不逐个写：这界面上可点元素十几个，
+        // 逐个写必然漏，漏掉的那几个按下去没反应，用户会以为点歪了。
+        Anim.attachPressScale(0.97f, btnScan);
+        Anim.attachPressScale(0.93f, btnCancel, btnUpdate, btnClearHistory,
+                txtThemeMode, txtIpValue, headerPorts, headerRegions);
+
         btnScan.setOnClickListener(v -> startScan());
         btnCancel.setOnClickListener(v -> cancelCurrentTask());
-        btnUpdate.setOnClickListener(v -> {
-            Anim.tapBounce(v);
-            updateData();
-        });
+        btnUpdate.setOnClickListener(v -> updateData());
         btnClearHistory.setOnClickListener(v -> clearScanHistory());
 
         // TLS 开关切换时端口集合完全不同（80 系 vs 443 系），必须重建。
         // 已选的端口在新模式下不合法，留着会让扫描全灭。
+        // IP 协议分段也给一致的选中反馈：同一张卡里两个分段控件，
+        // 一个有动效一个没有会让人怀疑它们行为不同
+        groupIPVersion.setOnCheckedChangeListener((g, id) -> {
+            View picked = g.findViewById(id);
+            Anim.segmentSelect(picked);
+            saveScanSettings();
+        });
+
         checkTLS.setOnCheckedChangeListener((v, checked) -> rebuildPortChips());
         renderRegionChips();
         rebuildPortChips();
@@ -321,6 +348,19 @@ public class MainActivity extends AppCompatActivity {
         for (int i = 0; i < counts.size(); i++) {
             final int n = counts.get(i);
             RadioButton rb = new RadioButton(this);
+            // ★ 「数字 1 一直被选中」那个 bug 的根因就在这一行的缺失。
+            //
+            // 动态 new 出来的 View，id 默认是 View.NO_ID（-1）。而 RadioGroup
+            // 全靠 id 记录当前选中项：它内部的 mCheckedId 存的就是 id，
+            // 取消上一个选中项时先判断 mCheckedId != NO_ID 才会动手。
+            //
+            // 三个按钮 id 全是 -1 时：初始那个 checked 的按钮让
+            // mCheckedId 变成 -1，等于 NO_ID；用户点「5」时 RadioGroup 走到
+            // 「取消上一个」这步，发现 mCheckedId == NO_ID 就整段跳过 ——
+            // 「1」的选中态再也没人清除，于是 1 和 5 同时高亮。
+            //
+            // 表现出来就是「1 一直被选中」。
+            rb.setId(View.generateViewId());
             LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(dp(44),
                     LinearLayout.LayoutParams.MATCH_PARENT);
             if (i > 0) lp.setMarginStart(dp(4));
@@ -332,13 +372,30 @@ public class MainActivity extends AppCompatActivity {
             rb.setTextSize(14f);
             rb.setTypeface(null, Typeface.BOLD);
             rb.setTextColor(getResources().getColorStateList(R.color.segmented_text, getTheme()));
-            rb.setChecked(n == resultCount);
             rb.setOnClickListener(v -> {
+                if (resultCount == n) return;
                 resultCount = n;
+                // 选中项放大回落。三个 44dp 方块只靠背景色变化，
+                // 眼睛容易看不出到底换没换
+                Anim.segmentSelect(v);
                 updateCountHint();
                 saveScanSettings();
             });
             groupCount.addView(rb);
+        }
+        // 选中态统一在全部子项加完之后设，而且走 RadioGroup.check(id)
+        // 而不是 RadioButton.setChecked()。
+        //
+        // 上面已经补了 id，单靠 setChecked 也能工作；但 check() 是让
+        // RadioGroup 自己走一遍选中流程，mCheckedId 必然和界面一致，
+        // 不依赖「addView 会替我同步状态」这个实现细节。
+        for (int i = 0; i < groupCount.getChildCount(); i++) {
+            View child = groupCount.getChildAt(i);
+            if (child instanceof RadioButton && i < counts.size()
+                    && counts.get(i) == resultCount) {
+                groupCount.check(child.getId());
+                break;
+            }
         }
         updateCountHint();
     }
@@ -558,9 +615,14 @@ public class MainActivity extends AppCompatActivity {
         chip.setOnClickListener(v -> {
             boolean next = !v.isSelected();
             v.setSelected(next);
-            Anim.tapBounce(v);
+            // 选中时放大回落，取消时不弹：加选是"多了一个"，值得强调；
+            // 取消只是回到默认，弹一下反而像操作失败了
+            if (next) {
+                Anim.segmentSelect(v);
+            }
             onToggle.onToggle(next);
         });
+        Anim.attachPressScale(chip, 0.93f);
         return chip;
     }
 
@@ -942,14 +1004,20 @@ public class MainActivity extends AppCompatActivity {
      * 端口选择和滚动位置，更不能打断正在跑的扫描。
      */
     private void selectTab(int tab) {
-        boolean changed = currentTab != tab || pageScan.getVisibility() == View.GONE;
+        int from = currentTab;
+        boolean changed = from != tab || pageScan.getVisibility() == View.GONE;
         currentTab = tab;
         View show = tab == 0 ? pageScan : pageHistory;
         View hide = tab == 0 ? pageHistory : pageScan;
         hide.setVisibility(View.GONE);
+
         // 只在真的切页时做动画。重复点同一个 tab 还闪一下会显得界面在抽。
+        //
+        // 横向滑入而不是纵向：两个分页是左右并列的关系（底部导航一左一右），
+        // 从下往上飞进来会让人以为是弹出了一个新层。方向跟着导航顺序 ——
+        // 去历史页从右边进，回优选页从左边进，和底栏的左右位置对应。
         if (changed) {
-            Anim.fadeInUp(show, dp(12), 0);
+            Anim.slideIn(show, tab > from ? dp(20) : dp(-20));
         } else {
             show.setVisibility(View.VISIBLE);
         }
@@ -964,6 +1032,11 @@ public class MainActivity extends AppCompatActivity {
             // 进历史页时刷一次：扫描可能在切页之后才完成
             renderHistory();
         }
+
+        // 分隔线要按新页面自己的滚动位置重算：两个页面的 scrollY 各自独立，
+        // 不重算的话从滚到一半的页面切到停在顶部的页面，线会留着不消失
+        SpringScrollView active = tab == 0 ? pageScan : pageHistory;
+        Anim.fadeTo(topBarDivider, active.getScrollY() > dp(4));
     }
 
     /**
@@ -1109,10 +1182,11 @@ public class MainActivity extends AppCompatActivity {
         row.setLayoutParams(lp);
         row.setClickable(true);
         row.setFocusable(true);
-        row.setOnClickListener(v -> {
-            Anim.tapBounce(v);
-            copyToClipboard("CF-IP", copyTarget, "已复制: " + copyTarget);
-        });
+        row.setOnClickListener(v ->
+                copyToClipboard("CF-IP", copyTarget, "已复制: " + copyTarget));
+        // 用按压反馈而不是点击后回弹：按压是"按住就有反应"，
+        // 复制这种瞬时动作用它更贴合，点完才弹会感觉延迟
+        Anim.attachPressScale(row, 0.97f);
 
         TextView rankView = new TextView(this);
         rankView.setText(String.valueOf(rank + 1));
@@ -1352,6 +1426,7 @@ public class MainActivity extends AppCompatActivity {
         deleteButton.setTextColor(getColorCompat(R.color.danger));
         deleteButton.setTextSize(12);
         deleteButton.setOnClickListener(v -> deleteHistoryItem(index));
+        Anim.attachPressScale(deleteButton, 0.9f);
         headerRow.addView(deleteButton, fixedSizeParams(48, 30));
 
         root.addView(headerRow, matchWrapParams());
@@ -1366,6 +1441,7 @@ public class MainActivity extends AppCompatActivity {
         ipView.setPadding(0, dp(5), 0, dp(4));
         ipView.setClickable(true);
         ipView.setOnClickListener(v -> copyToClipboard("CF-IP", address, "已复制: " + address));
+        Anim.attachPressScale(ipView, 0.96f);
         root.addView(ipView, matchWrapParams());
 
         TextView detailsView = new TextView(this);

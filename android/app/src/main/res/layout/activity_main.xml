@@ -29,6 +29,7 @@
         android:orientation="vertical">
 
     <LinearLayout
+        android:id="@+id/topBar"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:background="@drawable/glass_bar"
@@ -82,7 +83,19 @@
         android:layout_height="0dp"
         android:layout_weight="1">
 
-        <ScrollView
+    <!-- 顶栏分隔线。只在内容滚动之后淡入 —— 停在顶部时画一条线会把
+         顶栏和内容硬切成两块，玻璃是连续的一层，不该有硬边界。 -->
+    <View
+        android:id="@+id/topBarDivider"
+        android:layout_width="match_parent"
+        android:layout_height="1dp"
+        android:alpha="0"
+        android:background="@color/glass_hairline" />
+
+        <!-- SpringScrollView：越界时整块内容跟手位移、松手弹回。
+             系统默认的 EdgeEffect 发光会糊在玻璃上，API 31+ 的拉伸效果
+             会把卡片的 1dp 亮描边拽得粗细不均。 -->
+        <com.cf.ip.SpringScrollView
             android:id="@+id/pageScan"
             android:layout_width="match_parent"
             android:layout_height="match_parent"
@@ -875,9 +888,9 @@
             </LinearLayout>
                 </LinearLayout>
             </LinearLayout>
-        </ScrollView>
+        </com.cf.ip.SpringScrollView>
 
-        <ScrollView
+        <com.cf.ip.SpringScrollView
             android:id="@+id/pageHistory"
             android:layout_width="match_parent"
             android:layout_height="match_parent"
@@ -963,7 +976,7 @@
                     android:orientation="vertical" />
             </LinearLayout>
             </LinearLayout>
-        </ScrollView>
+        </com.cf.ip.SpringScrollView>
     </FrameLayout>
 
     <View
