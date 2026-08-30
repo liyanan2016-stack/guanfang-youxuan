@@ -4,18 +4,31 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
+	"strconv"
 	"strings"
 )
 
 // ScanResult 扫描结果
 type ScanResult struct {
-	IP            string `json:"ip"`
+	IP string `json:"ip"`
+	// Port 实测通过的端口。
+	//
+	// 必须输出：原版只给 IP，用户拿去接一个跑在 2053 的节点，
+	// 而工具验证的是 443 —— 握手能过、数据一发就被掐断，
+	// 报 io: read/write on closed pipe。给出 IP:端口才是完整地址。
+	Port int `json:"port"`
+	// Address 直接可用的 IP:端口，省得界面自己拼
+	Address       string `json:"address"`
 	Bandwidth     int    `json:"bandwidth"`     // 期望带宽 Mbps
 	RealBandwidth int    `json:"realBandwidth"` // 实测带宽 Mbps
 	MaxSpeed      int    `json:"maxSpeed"`      // 峰值速度 kB/s
 	LatencyMs     int    `json:"latencyMs"`
 	DataCenter    string `json:"dataCenter"`
-	Elapsed       int    `json:"elapsed"` // 总计用时 秒
+	// Country 实测落地国家代码。官方 IP 的落地机房与运营商线路有关，
+	// 事先无法预测，只能测完才知道。
+	Country string `json:"country"`
+	Elapsed int    `json:"elapsed"` // 总计用时 秒
 	// Cancelled 区分「用户主动取消」与「没找到」。
 	// 原版两者都返回空 IP，界面只能显示"未找到"，会误导用户。
 	Cancelled bool `json:"cancelled"`
@@ -28,7 +41,21 @@ type ScanResult struct {
 // Version 返回核心层版本号，供界面显示
 func Version() string { return libVersion }
 
-const libVersion = "1.1"
+const libVersion = "1.5"
+
+// HTTPPorts 返回明文模式可选端口的 CSV，供界面构建选项
+func HTTPPorts() string { return joinInts(cfHTTPPorts) }
+
+// HTTPSPorts 返回 TLS 模式可选端口的 CSV，供界面构建选项
+func HTTPSPorts() string { return joinInts(cfHTTPSPorts) }
+
+func joinInts(xs []int) string {
+	parts := make([]string, len(xs))
+	for i, x := range xs {
+		parts[i] = strconv.Itoa(x)
+	}
+	return strings.Join(parts, ",")
+}
 
 // SetCacheDir 设置缓存目录（Android 应用数据目录）
 // gomobile 必须显式设置，Android 下通常设为 Context.getFilesDir()
@@ -101,13 +128,23 @@ func enterTask() {
 	taskRequested = false
 }
 
-// GetIPs 运行 Cloudflare IP 优选，返回结果 JSON
+// GetIPs 运行 Cloudflare IP 优选，返回结果 JSON。
+//
 // v4: true=IPv4 false=IPv6
 // useTLS: 是否启用 TLS 握手
 // bandwidth: 期望带宽（Mbps），设为 0 则使用默认 1 Mbps
+// ports: 要测的端口 CSV（如 "443,2053"），空则只测默认端口（TLS 443 / 明文 80）
+// countries: 允许的落地国家代码 CSV（如 "HK,JP"），空则不限
+// sni: 自定义 SNI/Host，空则用 cloudflare.com
+//
+// 关于 countries —— 和反代优选有本质区别：反代节点列表自带国家标签，
+// 可以先筛后测；官方 IP 的落地机房取决于运营商线路，同一个 IP 在
+// 电信和联通下可能落到不同国家，事先无从得知。所以这里是「测完再筛」，
+// 筛得越窄要试的子网就越多，耗时会明显变长。
+//
 // 阻塞调用，需在后台线程执行。
 // 界面派发到后台线程之前应先调 BeginTask()，否则这段窗口里的取消会丢。
-func GetIPs(v4 bool, useTLS bool, bandwidth int) string {
+func GetIPs(v4 bool, useTLS bool, bandwidth int, ports string, countries string, sni string) string {
 	enterTask()
 	setProgress("正在初始化...")
 
@@ -125,24 +162,34 @@ func GetIPs(v4 bool, useTLS bool, bandwidth int) string {
 		bandwidth = maxBandwidthMbps
 	}
 
+	filter := scanFilter{
+		Ports:     parsePortsCSV(ports, useTLS),
+		Countries: parseCountriesCSV(countries),
+	}
+
 	// 转为 kB/s
 	speedTarget := bandwidth * 128
 
 	startTime := timeNow()
 
-	out := cloudflareTest(ipType, useTLS, defaultTaskNum, speedTarget)
+	out := cloudflareTest(ipType, useTLS, defaultTaskNum, speedTarget, filter, strings.TrimSpace(sni))
 
 	realBandwidth := out.MaxSpeed / 128
 	elapsed := int(timeSince(startTime).Seconds())
 
 	result := ScanResult{
 		IP:            out.IP,
+		Port:          out.Port,
 		Bandwidth:     bandwidth,
 		RealBandwidth: realBandwidth,
 		MaxSpeed:      out.MaxSpeed,
 		LatencyMs:     out.LatencyMs,
 		DataCenter:    out.DataCenter,
+		Country:       out.Country,
 		Elapsed:       elapsed,
+	}
+	if out.IP != "" && out.Port > 0 {
+		result.Address = net.JoinHostPort(out.IP, strconv.Itoa(out.Port))
 	}
 
 	switch {
@@ -154,13 +201,22 @@ func GetIPs(v4 bool, useTLS bool, bandwidth int) string {
 		setProgress("扫描已取消")
 
 	case out.IP == "":
+		// 地区筛选下要说清是「筛没了」还是「都不通」，
+		// 否则用户会以为工具坏了，而实际上只是条件太窄
+		scope := ""
+		if len(filter.Countries) > 0 {
+			scope = "（限定地区：" + strings.ToUpper(countries) + "）"
+		}
 		// 区分「全部子网测完」与「轮次用尽」，不谎报轮数
 		if out.PoolExhausted {
-			result.Error = fmt.Sprintf("%d 个子网已全部测过，没有一个 IP 能连通（用时 %d 秒）",
-				out.PoolSize, elapsed)
+			result.Error = fmt.Sprintf("%d 个子网已全部测过，没有一个 IP 符合条件%s（用时 %d 秒）",
+				out.PoolSize, scope, elapsed)
 		} else {
-			result.Error = fmt.Sprintf("已测试 %d 个子网（共 %d 轮），未找到可用 IP（用时 %d 秒）",
-				out.Tested, out.RoundsRun, elapsed)
+			result.Error = fmt.Sprintf("已测试 %d 个子网（共 %d 轮），未找到可用 IP%s（用时 %d 秒）",
+				out.Tested, out.RoundsRun, scope, elapsed)
+		}
+		if len(filter.Countries) > 0 {
+			result.Error += "。官方 IP 的落地地区取决于运营商线路，缩小地区会大幅降低命中率，可放宽后重试"
 		}
 		setProgress(fmt.Sprintf("扫描结束，用时 %d 秒", elapsed))
 

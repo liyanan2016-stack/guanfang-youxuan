@@ -44,6 +44,13 @@ public class MainActivity extends AppCompatActivity {
     private RadioButton radioIPv6;
     private Switch checkTLS;
     private EditText editBandwidth;
+    private EditText editCountries;
+    private EditText editSNI;
+    private LinearLayout layoutPorts;
+    private LinearLayout layoutRegions;
+    private LinearLayout layoutAdvanced;
+    private TextView txtAdvancedToggle;
+    private TextView txtPortHint;
     private Button btnScan;
     private Button btnCancel;
     private Button btnUpdate;
@@ -78,7 +85,31 @@ public class MainActivity extends AppCompatActivity {
     private static final String PREFS_USE_IPV4 = "use_ipv4";
     private static final String PREFS_USE_TLS = "use_tls";
     private static final String PREFS_BANDWIDTH = "bandwidth";
+    private static final String PREFS_PORTS = "ports";
+    private static final String PREFS_REGIONS = "regions";
+    private static final String PREFS_COUNTRIES_EXTRA = "countries_extra";
+    private static final String PREFS_SNI = "sni";
     private static final int MAX_HISTORY = 10;
+
+    /**
+     * 常用地区。代码是 cca2，和 locations.json 的字段一致。
+     *
+     * 只列常见的落地地区；其余用输入框补 —— 全列出来会是几十个筹码，
+     * 反而不好选。
+     */
+    private static final String[][] COMMON_REGIONS = {
+            {"HK", "香港"},
+            {"TW", "台湾"},
+            {"JP", "日本"},
+            {"KR", "韩国"},
+            {"SG", "新加坡"},
+            {"US", "美国"},
+    };
+
+    /** 当前选中的端口，跟着 TLS 开关重建 */
+    private final java.util.LinkedHashSet<Integer> selectedPorts = new java.util.LinkedHashSet<>();
+    /** 当前选中的常用地区代码 */
+    private final java.util.LinkedHashSet<String> selectedRegions = new java.util.LinkedHashSet<>();
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -90,6 +121,13 @@ public class MainActivity extends AppCompatActivity {
         radioIPv6 = findViewById(R.id.radioIPv6);
         checkTLS = findViewById(R.id.checkTLS);
         editBandwidth = findViewById(R.id.editBandwidth);
+        editCountries = findViewById(R.id.editCountries);
+        editSNI = findViewById(R.id.editSNI);
+        layoutPorts = findViewById(R.id.layoutPorts);
+        layoutRegions = findViewById(R.id.layoutRegions);
+        layoutAdvanced = findViewById(R.id.layoutAdvanced);
+        txtAdvancedToggle = findViewById(R.id.txtAdvancedToggle);
+        txtPortHint = findViewById(R.id.txtPortHint);
         btnScan = findViewById(R.id.btnScan);
         btnCancel = findViewById(R.id.btnCancel);
         btnUpdate = findViewById(R.id.btnUpdate);
@@ -148,7 +186,150 @@ public class MainActivity extends AppCompatActivity {
         btnUpdate.setOnClickListener(v -> updateData());
         btnClearHistory.setOnClickListener(v -> clearScanHistory());
 
+        txtAdvancedToggle.setOnClickListener(v -> toggleAdvanced());
+        // TLS 开关切换时端口集合完全不同（80 系 vs 443 系），必须重建。
+        // 已选的端口在新模式下不合法，留着会让扫描全灭。
+        checkTLS.setOnCheckedChangeListener((v, checked) -> rebuildPortChips());
+        renderRegionChips();
+        rebuildPortChips();
+
         renderHistory();
+    }
+
+    /** 展开/收起高级选项。默认收起：SNI 填错会导致全部测不通。 */
+    private void toggleAdvanced() {
+        boolean show = layoutAdvanced.getVisibility() != View.VISIBLE;
+        layoutAdvanced.setVisibility(show ? View.VISIBLE : View.GONE);
+        txtAdvancedToggle.setText(show ? "▾ 高级选项" : "▸ 高级选项");
+    }
+
+    /**
+     * 按当前 TLS 模式重建端口筹码。
+     *
+     * 端口列表从核心层取（Better.httpsPorts / httpPorts），不在界面里硬编码：
+     * 两处各写一份，改一处忘另一处就会出现「界面能选、核心层不认」的端口。
+     */
+    private void rebuildPortChips() {
+        boolean useTLS = checkTLS.isChecked();
+        String csv = useTLS ? Better.httpsPorts() : Better.httpPorts();
+        int defaultPort = useTLS ? 443 : 80;
+
+        // 换模式后旧端口不再合法，只保留仍在新列表里的
+        java.util.LinkedHashSet<Integer> valid = new java.util.LinkedHashSet<>();
+        java.util.List<Integer> ports = new java.util.ArrayList<>();
+        for (String s : csv.split(",")) {
+            s = s.trim();
+            if (s.isEmpty()) continue;
+            try {
+                int p = Integer.parseInt(s);
+                ports.add(p);
+                if (selectedPorts.contains(p)) valid.add(p);
+            } catch (NumberFormatException ignored) {
+            }
+        }
+        selectedPorts.clear();
+        selectedPorts.addAll(valid);
+        // 一个都没选就默认勾上标准端口，避免用户以为不选=不测
+        if (selectedPorts.isEmpty() && ports.contains(defaultPort)) {
+            selectedPorts.add(defaultPort);
+        }
+
+        layoutPorts.removeAllViews();
+        for (int p : ports) {
+            layoutPorts.addView(makeChip(String.valueOf(p), selectedPorts.contains(p), sel -> {
+                if (sel) {
+                    selectedPorts.add(p);
+                } else {
+                    selectedPorts.remove(p);
+                }
+                updatePortHint();
+                return true;
+            }));
+        }
+        updatePortHint();
+    }
+
+    /** 端口选得越多，候选数成倍增长，得让用户知道会变慢。 */
+    private void updatePortHint() {
+        int n = selectedPorts.size();
+        if (n == 0) {
+            txtPortHint.setText("未选端口，将只测标准端口");
+        } else if (n == 1) {
+            txtPortHint.setText("选你节点实际使用的端口，多选会变慢");
+        } else {
+            txtPortHint.setText("已选 " + n + " 个端口，候选数为单端口的 " + n + " 倍，会明显变慢");
+        }
+    }
+
+    /** 渲染常用地区筹码。不选=不限，这一点靠上面的说明文字交代。 */
+    private void renderRegionChips() {
+        layoutRegions.removeAllViews();
+        for (String[] r : COMMON_REGIONS) {
+            final String code = r[0];
+            layoutRegions.addView(makeChip(r[1], selectedRegions.contains(code), sel -> {
+                if (sel) {
+                    selectedRegions.add(code);
+                } else {
+                    selectedRegions.remove(code);
+                }
+                return true;
+            }));
+        }
+    }
+
+    /** 可点选的筹码。用 TextView + setSelected，不引入额外依赖。 */
+    private TextView makeChip(String label, boolean selected, ChipToggle onToggle) {
+        TextView chip = new TextView(this);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, dp(34));
+        lp.setMarginEnd(dp(8));
+        chip.setLayoutParams(lp);
+        chip.setBackgroundResource(R.drawable.chip_bg);
+        chip.setTextColor(getResources().getColorStateList(R.color.chip_text, getTheme()));
+        chip.setTextSize(13f);
+        chip.setGravity(Gravity.CENTER);
+        chip.setPadding(dp(14), 0, dp(14), 0);
+        chip.setText(label);
+        chip.setSelected(selected);
+        chip.setClickable(true);
+        chip.setFocusable(true);
+        chip.setOnClickListener(v -> {
+            boolean next = !v.isSelected();
+            v.setSelected(next);
+            onToggle.onToggle(next);
+        });
+        return chip;
+    }
+
+    private interface ChipToggle {
+        boolean onToggle(boolean selected);
+    }
+
+    /**
+     * 汇总地区筛选条件：常用筹码 + 自由输入，去重后拼成 CSV。
+     *
+     * 输入框允许写任意 cca2，是为了覆盖筹码没列的地区（如 DE、NL）。
+     * 不做合法性校验 —— 写错的代码在核心层只会匹配不到，
+     * 而错误信息已经会提示「放宽地区重试」。
+     */
+    private String collectCountries() {
+        java.util.LinkedHashSet<String> all = new java.util.LinkedHashSet<>(selectedRegions);
+        String extra = editCountries.getText().toString();
+        for (String s : extra.split("[,，\\s]+")) {
+            s = s.trim().toUpperCase(Locale.ROOT);
+            if (!s.isEmpty()) all.add(s);
+        }
+        return String.join(",", all);
+    }
+
+    /** 汇总端口 CSV。空串表示让核心层用默认端口。 */
+    private String collectPorts() {
+        StringBuilder sb = new StringBuilder();
+        for (int p : selectedPorts) {
+            if (sb.length() > 0) sb.append(',');
+            sb.append(p);
+        }
+        return sb.toString();
     }
 
     // cancelCurrentTask 取消扫描或数据更新。两者都走核心层同一个取消通道，
@@ -167,6 +348,9 @@ public class MainActivity extends AppCompatActivity {
         final boolean v4 = radioIPv4.isChecked();
         final boolean useTLS = checkTLS.isChecked();
         final int bandwidth = normalizeBandwidthInput();
+        final String ports = collectPorts();
+        final String countries = collectCountries();
+        final String sni = editSNI.getText().toString().trim();
         editBandwidth.clearFocus();
         hideKeyboard(editBandwidth);
         saveScanSettings();
@@ -191,7 +375,7 @@ public class MainActivity extends AppCompatActivity {
 
         executor.execute(() -> {
             try {
-                String resultJson = Better.getIPs(v4, useTLS, bandwidth);
+                String resultJson = Better.getIPs(v4, useTLS, bandwidth, ports, countries, sni);
                 mainHandler.post(() -> onScanResult(resultJson));
             } catch (Exception e) {
                 mainHandler.post(() -> showResult("扫描出错: " + e.getMessage()));
@@ -259,20 +443,31 @@ public class MainActivity extends AppCompatActivity {
             int maxSpeed = json.optInt("maxSpeed", 0);
             int latencyMs = json.optInt("latencyMs", 0);
             String dataCenter = json.optString("dataCenter", "");
+            String country = json.optString("country", "");
+            int port = json.optInt("port", 0);
+            // address 是核心层拼好的 IP:端口。用它而不是自己拼，
+            // 避免两处格式不一致（尤其 IPv6 要加方括号）
+            String address = json.optString("address", "");
+            if (address.isEmpty()) address = ip;
             int elapsed = json.optInt("elapsed", 0);
             String scanTime = formatNow();
 
-            currentIp = ip;
+            // 复制的必须是带端口的完整地址：只给 IP 就是原来那个
+            // closed pipe 问题的来源 —— 用户拿 IP 去接一个跑在别的端口的节点
+            currentIp = address;
 
-            String resultText = "IP: " + ip + "\n"
+            String resultText = "地址: " + address + "\n"
+                    + "端口: " + (port > 0 ? String.valueOf(port) : "-") + "\n"
                     + "期望带宽: " + bandwidth + " Mbps\n"
                     + "实测带宽: " + realBandwidth + " Mbps\n"
                     + "峰值速度: " + maxSpeed + " kB/s\n"
                     + "往返延迟: " + latencyMs + " ms\n"
-                    + "数据中心: " + displayValue(dataCenter) + "\n"
+                    + "数据中心: " + displayValue(dataCenter)
+                    + (country.isEmpty() ? "" : " (" + country + ")") + "\n"
                     + "总计用时: " + elapsed + " 秒";
 
-            showStructuredResult(ip, bandwidth, realBandwidth, maxSpeed, latencyMs, dataCenter, elapsed);
+            showStructuredResult(address, bandwidth, realBandwidth, maxSpeed, latencyMs,
+                    dataCenter, country, elapsed);
 
             // 未达标时结果和说明同时给出：IP 仍然可用，
             // 但要让用户知道没到他要的带宽
@@ -427,6 +622,39 @@ public class MainActivity extends AppCompatActivity {
         radioIPv6.setChecked(!useIPv4);
         checkTLS.setChecked(useTLS);
         editBandwidth.setText(String.valueOf(bandwidth <= 0 ? 1 : bandwidth));
+
+        // 端口与地区也要记住：每次扫描都重填一遍太折磨人。
+        // 注意此时不能调 rebuildPortChips —— 那要等 onCreate 里
+        // 把 TLS 监听装好之后统一渲染一次，否则会渲染两遍。
+        String ports = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+                .getString(PREFS_PORTS, "");
+        selectedPorts.clear();
+        for (String s : ports.split(",")) {
+            s = s.trim();
+            if (s.isEmpty()) continue;
+            try {
+                selectedPorts.add(Integer.parseInt(s));
+            } catch (NumberFormatException ignored) {
+            }
+        }
+
+        String regions = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+                .getString(PREFS_REGIONS, "");
+        selectedRegions.clear();
+        for (String s : regions.split(",")) {
+            s = s.trim();
+            if (!s.isEmpty()) selectedRegions.add(s);
+        }
+
+        editCountries.setText(getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+                .getString(PREFS_COUNTRIES_EXTRA, ""));
+        editSNI.setText(getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+                .getString(PREFS_SNI, ""));
+        // 上次填过 SNI 就直接展开高级选项，否则用户会以为设置丢了
+        if (editSNI.getText().length() > 0) {
+            layoutAdvanced.setVisibility(View.VISIBLE);
+            txtAdvancedToggle.setText("▾ 高级选项");
+        }
     }
 
     private void saveScanSettings() {
@@ -435,6 +663,10 @@ public class MainActivity extends AppCompatActivity {
                 .putBoolean(PREFS_USE_IPV4, radioIPv4.isChecked())
                 .putBoolean(PREFS_USE_TLS, checkTLS.isChecked())
                 .putInt(PREFS_BANDWIDTH, normalizeBandwidthInput())
+                .putString(PREFS_PORTS, collectPorts())
+                .putString(PREFS_REGIONS, String.join(",", selectedRegions))
+                .putString(PREFS_COUNTRIES_EXTRA, editCountries.getText().toString().trim())
+                .putString(PREFS_SNI, editSNI.getText().toString().trim())
                 .apply();
     }
 
@@ -459,27 +691,30 @@ public class MainActivity extends AppCompatActivity {
         showToast("主题: " + THEME_LABELS[themeModeIndex]);
     }
 
-    private void showStructuredResult(String ip, int bandwidth, int realBandwidth,
-                                      int maxSpeed, int latencyMs, String dataCenter, int elapsed) {
+    private void showStructuredResult(String address, int bandwidth, int realBandwidth,
+                                      int maxSpeed, int latencyMs, String dataCenter,
+                                      String country, int elapsed) {
         layoutProgress.setVisibility(View.GONE);
         layoutResult.setVisibility(View.VISIBLE);
         txtIpValue.setEnabled(true);
-        txtIpValue.setText(ip);
+        txtIpValue.setText(address);
         txtTargetBandwidth.setText(bandwidth + " Mbps");
         txtRealBandwidth.setText(realBandwidth + " Mbps");
         txtMaxSpeed.setText(maxSpeed + " kB/s");
         txtLatency.setText(latencyMs + " ms");
-        txtDataCenter.setText(displayValue(dataCenter));
+        // 带上国家代码：地区筛选的结果得能核对，否则用户没法确认筛选生效了
+        String dc = displayValue(dataCenter);
+        txtDataCenter.setText(country.isEmpty() ? dc : dc + " " + country);
         txtElapsed.setText(elapsed + " 秒");
         txtResult.setVisibility(View.GONE);
     }
 
     private void copyCurrentIp() {
         if (currentIp == null || currentIp.isEmpty()) {
-            showToast("暂无可复制的 IP");
+            showToast("暂无可复制的地址");
             return;
         }
-        copyToClipboard("CF-IP", currentIp, "已复制 IP: " + currentIp);
+        copyToClipboard("CF-IP", currentIp, "已复制: " + currentIp);
     }
 
     private void copyToClipboard(String label, String text, String toastText) {
@@ -502,11 +737,15 @@ public class MainActivity extends AppCompatActivity {
             JSONObject item = new JSONObject();
             item.put("time", scanTime);
             item.put("ip", source.optString("ip", ""));
+            item.put("port", source.optInt("port", 0));
+            // 历史里存完整地址：只存 IP 的话回看时还得重新猜端口
+            item.put("address", source.optString("address", source.optString("ip", "")));
             item.put("bandwidth", source.optInt("bandwidth", 0));
             item.put("realBandwidth", source.optInt("realBandwidth", 0));
             item.put("maxSpeed", source.optInt("maxSpeed", 0));
             item.put("latencyMs", source.optInt("latencyMs", 0));
             item.put("dataCenter", source.optString("dataCenter", ""));
+            item.put("country", source.optString("country", ""));
             item.put("elapsed", source.optInt("elapsed", 0));
             item.put("resultText", resultText);
 
@@ -584,11 +823,15 @@ public class MainActivity extends AppCompatActivity {
     private View createHistoryItem(JSONObject item, int index) {
         String time = item.optString("time", "");
         String ip = item.optString("ip", "");
+        // 老版本的历史没有 address 字段，回落到 ip，否则升级后历史全变空
+        final String address = item.optString("address", ip).isEmpty()
+                ? ip : item.optString("address", ip);
         int bandwidth = item.optInt("bandwidth", 0);
         int realBandwidth = item.optInt("realBandwidth", 0);
         int maxSpeed = item.optInt("maxSpeed", 0);
         int latencyMs = item.optInt("latencyMs", 0);
         String dataCenter = item.optString("dataCenter", "");
+        String country = item.optString("country", "");
         int elapsed = item.optInt("elapsed", 0);
 
         LinearLayout root = new LinearLayout(this);
@@ -626,7 +869,7 @@ public class MainActivity extends AppCompatActivity {
         root.addView(headerRow, matchWrapParams());
 
         TextView ipView = new TextView(this);
-        ipView.setText(ip);
+        ipView.setText(address);
         ipView.setTextColor(getColorCompat(R.color.primary));
         ipView.setTextSize(18);
         ipView.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
@@ -634,13 +877,15 @@ public class MainActivity extends AppCompatActivity {
         ipView.setMinHeight(dp(40));
         ipView.setPadding(0, dp(5), 0, dp(4));
         ipView.setClickable(true);
-        ipView.setOnClickListener(v -> copyToClipboard("CF-IP", ip, "已复制 IP: " + ip));
+        ipView.setOnClickListener(v -> copyToClipboard("CF-IP", address, "已复制: " + address));
         root.addView(ipView, matchWrapParams());
 
         TextView detailsView = new TextView(this);
         detailsView.setText("实测 " + realBandwidth + " Mbps / 目标 " + bandwidth + " Mbps\n"
                 + "峰值 " + maxSpeed + " kB/s / 延迟 " + latencyMs + " ms\n"
-                + "数据中心 " + displayValue(dataCenter) + " / 用时 " + elapsed + " 秒");
+                + "数据中心 " + displayValue(dataCenter)
+                + (country.isEmpty() ? "" : " " + country)
+                + " / 用时 " + elapsed + " 秒");
         detailsView.setTextColor(getColorCompat(R.color.text_secondary));
         detailsView.setTextSize(13);
         detailsView.setLineSpacing(dp(2), 1.0f);

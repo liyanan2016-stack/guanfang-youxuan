@@ -33,7 +33,7 @@ func TestRealSubnetLists(t *testing.T) {
 			s := newSubnetSampler(subnets)
 			batch := s.next(200)
 
-			var ips []string
+			var ips []candidateIP
 			if tc.v6 {
 				ips = getRandomIPv6s(batch)
 			} else {
@@ -44,24 +44,21 @@ func TestRealSubnetLists(t *testing.T) {
 			}
 			t.Logf("%d 个子网 -> %d 个 IP", len(batch), len(ips))
 
-			// 生成顺序与 batch 一一对应（跳过的子网会错位，
-			// 所以这里按子网重新配对校验）
+			// 每个候选自带来源子网，直接按它校验，不再依赖下标配对
 			checked := 0
-			for i, cidr := range batch {
-				if i >= len(ips) {
-					break
-				}
-				_, subnet, err := net.ParseCIDR(cidr)
+			for _, c := range ips {
+				_, subnet, err := net.ParseCIDR(c.Subnet)
 				if err != nil {
+					t.Errorf("候选 %s 记录的来源子网 %q 不合法", c.IP, c.Subnet)
 					continue
 				}
-				ip := net.ParseIP(ips[i])
+				ip := net.ParseIP(c.IP)
 				if ip == nil {
-					t.Errorf("%s 生成了非法 IP %q", cidr, ips[i])
+					t.Errorf("%s 生成了非法 IP %q", c.Subnet, c.IP)
 					continue
 				}
 				if !subnet.Contains(ip) {
-					t.Errorf("%s 生成的 %s 不在子网内", cidr, ips[i])
+					t.Errorf("%s 生成的 %s 不在子网内", c.Subnet, c.IP)
 				}
 				checked++
 			}
@@ -69,8 +66,8 @@ func TestRealSubnetLists(t *testing.T) {
 
 			// 生成的 IP 不应大量重复（说明随机源工作正常）
 			uniq := make(map[string]struct{}, len(ips))
-			for _, ip := range ips {
-				uniq[ip] = struct{}{}
+			for _, c := range ips {
+				uniq[c.IP] = struct{}{}
 			}
 			if len(uniq) < len(ips)*9/10 {
 				t.Errorf("%d 个 IP 只有 %d 个唯一值，随机性可疑", len(ips), len(uniq))

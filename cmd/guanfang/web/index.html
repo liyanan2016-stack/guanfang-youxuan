@@ -48,6 +48,21 @@
     color:var(--fg);border-radius:8px;padding:8px 10px;font-size:14px;
   }
   .unit{font-size:13px;color:var(--muted)}
+  /* 多选筹码（端口 / 地区）。用 button 而不是 checkbox：
+     一行能横向排开，移动端也好点。 */
+  .row.col{align-items:flex-start;flex-direction:column;gap:8px}
+  .chips{display:flex;gap:8px;flex-wrap:wrap}
+  .chips button{
+    background:var(--card2);border:1px solid var(--line);color:var(--fg);
+    border-radius:16px;padding:6px 14px;font-size:13px;cursor:pointer;
+  }
+  .chips button.on{background:var(--accent);color:#05202e;font-weight:600;border-color:var(--accent)}
+  input[type=text].wide{
+    width:100%;max-width:420px;background:var(--card2);border:1px solid var(--line);
+    color:var(--fg);border-radius:8px;padding:8px 10px;font-size:14px;
+  }
+  .hint.sub{margin-top:0}
+  .toggle{font-size:13px;color:var(--accent);cursor:pointer;font-weight:600}
   .btns{display:flex;gap:10px;flex-wrap:wrap}
   button.act{
     flex:1;min-width:130px;border:0;border-radius:11px;padding:13px;
@@ -121,6 +136,33 @@
       <input type="number" id="bw" value="1" min="1" max="1000">
       <span class="unit">Mbps</span>
     </div>
+    <!-- 端口：原版只测 80/443，优选出的 IP 拿去接一个跑在 2053 的节点
+         会报 closed pipe，因为验证的根本不是要用的那个端口 -->
+    <div class="row col">
+      <label class="lbl">端口</label>
+      <div class="chips" id="chipPorts"></div>
+      <div class="hint sub" id="portHint">选你节点实际使用的端口，多选会变慢</div>
+    </div>
+    <!-- 地区：官方 IP 落地机房取决于运营商线路，事先无从得知，
+         只能测完拿 CF-RAY 的 colo 反查国家再筛 -->
+    <div class="row col">
+      <label class="lbl">落地地区</label>
+      <div class="chips" id="chipRegions"></div>
+      <input type="text" id="countriesExtra" class="wide"
+             placeholder="其他地区代码，逗号分隔，如 DE,NL">
+      <div class="hint sub">
+        不选=不限。官方 IP 的落地地区随运营商线路变化，筛得越窄命中率越低、耗时越长。
+      </div>
+    </div>
+    <div class="row col">
+      <span class="toggle" id="advToggle">▸ 高级选项</span>
+      <div id="advBox" style="display:none">
+        <input type="text" id="sni" class="wide" placeholder="自定义 SNI / Host，例如 your.domain.com">
+        <div class="hint sub">
+          留空用 cloudflare.com。填你节点的域名可让结果更贴近实际；填错会导致全部测不通。
+        </div>
+      </div>
+    </div>
     <div class="btns">
       <button class="act primary" id="btnScan">开始扫描</button>
       <button class="act ghost" id="btnCancel" disabled>取消</button>
@@ -160,7 +202,7 @@
       <button class="act ghost" id="btnClearHist">清空历史</button>
       <button class="act ghost" id="btnClearCache">清除缓存</button>
     </div>
-    <div class="hint" id="footHint">点击 IP 可复制</div>
+    <div class="hint" id="footHint">点击地址可复制</div>
   </div>
 </div>
 
@@ -205,8 +247,99 @@ document.querySelectorAll('#segTLS button').forEach(b=>{
     if(b.disabled) return;
     document.querySelectorAll('#segTLS button').forEach(x=>x.classList.remove('on'));
     b.classList.add('on'); useTLS = b.dataset.t === '1';
+    // 端口集合跟着 TLS 模式变（80 系 vs 443 系）。已选的在新模式下
+    // 不合法，留着会让扫描全灭，所以整个重建。
+    renderPortChips();
   };
 });
+
+// ---------- 端口与地区筛选 ----------
+
+// 端口列表由后端给（/api/ports），不在前端硬编码：
+// 两处各写一份，改一处忘另一处就会出现「界面能选、核心层不认」的端口。
+let httpPorts = [80], httpsPorts = [443];
+const selectedPorts = new Set();
+
+// 常用地区。只列常见落地地区，其余靠输入框补 ——
+// 全列出来是几十个筹码，反而不好选。
+const COMMON_REGIONS = [
+  ['HK','香港'], ['TW','台湾'], ['JP','日本'],
+  ['KR','韩国'], ['SG','新加坡'], ['US','美国'],
+];
+const selectedRegions = new Set();
+
+function renderPortChips(){
+  const ports = useTLS ? httpsPorts : httpPorts;
+  const def = useTLS ? 443 : 80;
+
+  // 换模式后旧端口不再合法，只留仍在新列表里的
+  for(const p of Array.from(selectedPorts)){
+    if(!ports.includes(p)) selectedPorts.delete(p);
+  }
+  // 一个都没选就默认勾标准端口，免得用户以为不选=不测
+  if(selectedPorts.size === 0 && ports.includes(def)) selectedPorts.add(def);
+
+  const box = document.getElementById('chipPorts');
+  box.innerHTML = '';
+  ports.forEach(p=>{
+    const b = document.createElement('button');
+    b.textContent = p;
+    if(selectedPorts.has(p)) b.classList.add('on');
+    b.onclick = ()=>{
+      if(b.disabled) return;
+      if(selectedPorts.has(p)){ selectedPorts.delete(p); b.classList.remove('on'); }
+      else { selectedPorts.add(p); b.classList.add('on'); }
+      updatePortHint();
+    };
+    box.appendChild(b);
+  });
+  updatePortHint();
+}
+
+// 端口选得越多候选数成倍增长，得让用户知道会变慢
+function updatePortHint(){
+  const n = selectedPorts.size;
+  const el = document.getElementById('portHint');
+  if(n === 0) el.textContent = '未选端口，将只测标准端口';
+  else if(n === 1) el.textContent = '选你节点实际使用的端口，多选会变慢';
+  else el.textContent = '已选 ' + n + ' 个端口，候选数为单端口的 ' + n + ' 倍，会明显变慢';
+}
+
+function renderRegionChips(){
+  const box = document.getElementById('chipRegions');
+  box.innerHTML = '';
+  COMMON_REGIONS.forEach(([code,name])=>{
+    const b = document.createElement('button');
+    b.textContent = name;
+    if(selectedRegions.has(code)) b.classList.add('on');
+    b.onclick = ()=>{
+      if(b.disabled) return;
+      if(selectedRegions.has(code)){ selectedRegions.delete(code); b.classList.remove('on'); }
+      else { selectedRegions.add(code); b.classList.add('on'); }
+    };
+    box.appendChild(b);
+  });
+}
+
+// 常用筹码 + 自由输入，去重后拼 CSV。
+// 输入框不做合法性校验：写错的代码在核心层只会匹配不到，
+// 而错误信息本身会提示「放宽地区重试」。
+function collectCountries(){
+  const all = new Set(selectedRegions);
+  document.getElementById('countriesExtra').value
+    .split(/[,，\s]+/).forEach(s=>{
+      s = s.trim().toUpperCase();
+      if(s) all.add(s);
+    });
+  return Array.from(all).join(',');
+}
+
+document.getElementById('advToggle').onclick = ()=>{
+  const box = document.getElementById('advBox');
+  const show = box.style.display === 'none';
+  box.style.display = show ? 'block' : 'none';
+  document.getElementById('advToggle').textContent = show ? '▾ 高级选项' : '▸ 高级选项';
+};
 
 // ---------- 运行状态 ----------
 
@@ -218,6 +351,10 @@ function setBusy(on, label){
   document.getElementById('btnScan').textContent = on ? (label || '扫描中…') : '开始扫描';
   document.querySelectorAll('#segIP button,#segTLS button').forEach(b=>b.disabled = on);
   document.getElementById('bw').disabled = on;
+  // 扫描中锁掉筛选项：改了也不会生效，留着可点会误导
+  document.querySelectorAll('#chipPorts button,#chipRegions button').forEach(b=>b.disabled = on);
+  document.getElementById('countriesExtra').disabled = on;
+  document.getElementById('sni').disabled = on;
 }
 
 document.getElementById('btnScan').onclick = async ()=>{
@@ -229,7 +366,12 @@ document.getElementById('btnScan').onclick = async ()=>{
 
   const r = await fetch('/api/scan',{
     method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({v4: useV4, useTLS: useTLS, bandwidth: bw})
+    body: JSON.stringify({
+      v4: useV4, useTLS: useTLS, bandwidth: bw,
+      ports: Array.from(selectedPorts).join(','),
+      countries: collectCountries(),
+      sni: document.getElementById('sni').value.trim()
+    })
   }).then(r=>r.json()).catch(()=>({error:'无法连接本地服务'}));
   if(r.error){ toast(r.error); return; }
 
@@ -315,12 +457,15 @@ function showResult(r){
     prog.innerHTML = '<span class="err">' + esc(r.error) + '</span>';
   }
 
-  document.getElementById('rIP').textContent    = r.ip;
+  // 显示带端口的完整地址：只给 IP 就是 closed pipe 问题的来源
+  document.getElementById('rIP').textContent    = r.address || r.ip;
   document.getElementById('rBw').textContent    = r.bandwidth ? r.bandwidth+' Mbps' : '-';
   document.getElementById('rReal').textContent  = r.realBandwidth ? r.realBandwidth+' Mbps' : '-';
   document.getElementById('rSpeed').textContent = r.maxSpeed ? r.maxSpeed+' kB/s' : '-';
   document.getElementById('rLat').textContent   = r.latencyMs ? r.latencyMs+' ms' : '-';
-  document.getElementById('rDC').textContent    = r.dataCenter || '-';
+  // 附上国家代码，让地区筛选的结果可以核对
+  document.getElementById('rDC').textContent    =
+    (r.dataCenter || '-') + (r.country ? ' ('+r.country+')' : '');
   document.getElementById('rTime').textContent  = r.elapsed ? r.elapsed+' 秒' : '-';
 }
 
@@ -328,14 +473,16 @@ async function loadHist(){
   const items = await fetch('/api/history').then(r=>r.json()).catch(()=>[]);
   const box = document.getElementById('histBox');
   if(!items.length){ box.innerHTML = '<div class="empty">暂无历史记录</div>'; return; }
-  let h = '<table><thead><tr><th>IP</th><th>实测</th><th>峰值</th><th>延迟</th>'
+  let h = '<table><thead><tr><th>地址</th><th>实测</th><th>峰值</th><th>延迟</th>'
         + '<th>数据中心</th><th>时间</th></tr></thead><tbody>';
   for(const it of items){
-    h += '<tr><td class="ip" data-ip="'+esc(it.ip)+'">'+esc(it.ip)+'</td>'
+    // 老历史没有 address，回落到 ip，否则升级后这一列全空
+    const addr = it.address || it.ip || '';
+    h += '<tr><td class="ip" data-ip="'+esc(addr)+'">'+esc(addr)+'</td>'
        + '<td>'+(it.realBandwidth||0)+' Mbps</td>'
        + '<td>'+(it.maxSpeed||0)+' kB/s</td>'
        + '<td>'+(it.latencyMs||0)+' ms</td>'
-       + '<td>'+esc(it.dataCenter||'-')+'</td>'
+       + '<td>'+esc(it.dataCenter||'-')+(it.country?' ('+esc(it.country)+')':'')+'</td>'
        + '<td>'+esc(it.time||'-')+'</td></tr>';
   }
   box.innerHTML = h + '</tbody></table>';
@@ -348,14 +495,20 @@ async function loadMeta(){
   const m = await fetch('/api/meta').then(r=>r.json()).catch(()=>null);
   if(!m) return;
   if(m.version) document.getElementById('ver').textContent = 'v' + m.version;
+  // 端口列表从后端取，前端只负责渲染
+  if(m.httpPorts)  httpPorts  = m.httpPorts.split(',').map(Number).filter(Boolean);
+  if(m.httpsPorts) httpsPorts = m.httpsPorts.split(',').map(Number).filter(Boolean);
+  renderPortChips();
   if(m.dataDir){
     document.getElementById('footHint').textContent =
-      '点击 IP 可复制 · 数据目录 ' + m.dataDir;
+      '点击地址可复制 · 数据目录 ' + m.dataDir;
   }
 }
 
 // 页面可能在扫描进行中被刷新，先探一次状态再决定要不要接着轮询
 async function init(){
+  renderRegionChips();
+  renderPortChips();   // 先用默认端口渲染，loadMeta 拿到真实列表后会重渲
   loadMeta();
   loadHist();
   const s = await fetch('/api/status').then(r=>r.json()).catch(()=>null);

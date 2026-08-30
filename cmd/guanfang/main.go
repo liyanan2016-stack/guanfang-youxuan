@@ -62,12 +62,17 @@ func initDataDir() {
 // ---------- 历史记录 ----------
 
 type histItem struct {
-	IP            string `json:"ip"`
+	IP string `json:"ip"`
+	// Port 实测通过的端口。历史记录必须带上它，
+	// 否则回看时只有 IP，还得重新猜端口
+	Port          int    `json:"port"`
+	Address       string `json:"address"`
 	Bandwidth     int    `json:"bandwidth"`
 	RealBandwidth int    `json:"realBandwidth"`
 	MaxSpeed      int    `json:"maxSpeed"`
 	LatencyMs     int    `json:"latencyMs"`
 	DataCenter    string `json:"dataCenter"`
+	Country       string `json:"country"`
 	Elapsed       int    `json:"elapsed"`
 	Time          string `json:"time"`
 }
@@ -107,9 +112,12 @@ func handleScan(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		V4        bool `json:"v4"`
-		UseTLS    bool `json:"useTLS"`
-		Bandwidth int  `json:"bandwidth"`
+		V4        bool   `json:"v4"`
+		UseTLS    bool   `json:"useTLS"`
+		Bandwidth int    `json:"bandwidth"`
+		Ports     string `json:"ports"`
+		Countries string `json:"countries"`
+		SNI       string `json:"sni"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, map[string]string{"error": "参数解析失败: " + err.Error()})
@@ -131,7 +139,7 @@ func handleScan(w http.ResponseWriter, r *http.Request) {
 	stateMu.Unlock()
 
 	go func() {
-		res := better.GetIPs(req.V4, req.UseTLS, req.Bandwidth)
+		res := better.GetIPs(req.V4, req.UseTLS, req.Bandwidth, req.Ports, req.Countries, req.SNI)
 
 		stateMu.Lock()
 		lastResult = res
@@ -141,22 +149,28 @@ func handleScan(w http.ResponseWriter, r *http.Request) {
 		// 有结果才写历史；用户取消的扫描不记录
 		var parsed struct {
 			IP            string `json:"ip"`
+			Port          int    `json:"port"`
+			Address       string `json:"address"`
 			Bandwidth     int    `json:"bandwidth"`
 			RealBandwidth int    `json:"realBandwidth"`
 			MaxSpeed      int    `json:"maxSpeed"`
 			LatencyMs     int    `json:"latencyMs"`
 			DataCenter    string `json:"dataCenter"`
+			Country       string `json:"country"`
 			Elapsed       int    `json:"elapsed"`
 			Cancelled     bool   `json:"cancelled"`
 		}
 		if json.Unmarshal([]byte(res), &parsed) == nil && parsed.IP != "" && !parsed.Cancelled {
 			appendHistory(histItem{
 				IP:            parsed.IP,
+				Port:          parsed.Port,
+				Address:       parsed.Address,
 				Bandwidth:     parsed.Bandwidth,
 				RealBandwidth: parsed.RealBandwidth,
 				MaxSpeed:      parsed.MaxSpeed,
 				LatencyMs:     parsed.LatencyMs,
 				DataCenter:    parsed.DataCenter,
+				Country:       parsed.Country,
 				Elapsed:       parsed.Elapsed,
 				Time:          time.Now().Format("2006-01-02 15:04"),
 			})
@@ -239,6 +253,10 @@ func handleMeta(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]string{
 		"version": appVersion,
 		"dataDir": dataDir,
+		// 端口列表由核心层给出，前端不硬编码 —— 两处各写一份，
+		// 改一处忘另一处就会出现「界面能选、核心层不认」的端口
+		"httpPorts":  better.HTTPPorts(),
+		"httpsPorts": better.HTTPSPorts(),
 	})
 }
 
