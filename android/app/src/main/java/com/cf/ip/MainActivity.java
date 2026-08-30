@@ -200,7 +200,7 @@ public class MainActivity extends AppCompatActivity {
     private void toggleAdvanced() {
         boolean show = layoutAdvanced.getVisibility() != View.VISIBLE;
         layoutAdvanced.setVisibility(show ? View.VISIBLE : View.GONE);
-        txtAdvancedToggle.setText(show ? "▾ 高级选项" : "▸ 高级选项");
+        txtAdvancedToggle.setText(show ? "▾ 高级选项（节点域名 / SNI）" : "▸ 高级选项（节点域名 / SNI）");
     }
 
     /**
@@ -653,7 +653,7 @@ public class MainActivity extends AppCompatActivity {
         // 上次填过 SNI 就直接展开高级选项，否则用户会以为设置丢了
         if (editSNI.getText().length() > 0) {
             layoutAdvanced.setVisibility(View.VISIBLE);
-            txtAdvancedToggle.setText("▾ 高级选项");
+            txtAdvancedToggle.setText("▾ 高级选项（节点域名 / SNI）");
         }
     }
 

@@ -349,7 +349,7 @@
                 android:layout_marginTop="14dp"
                 android:clickable="true"
                 android:focusable="true"
-                android:text="▸ 高级选项"
+                android:text="▸ 高级选项（节点域名 / SNI）"
                 android:textColor="@color/primary"
                 android:textSize="13sp"
                 android:textStyle="bold" />
@@ -365,7 +365,7 @@
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="10dp"
-                    android:text="自定义 SNI / Host（留空用 cloudflare.com）"
+                    android:text="你的节点域名（SNI / Host）"
                     android:textColor="@color/text_secondary"
                     android:textSize="13sp" />
 
@@ -373,7 +373,7 @@
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="3dp"
-                    android:text="填你节点的域名可让结果更贴近实际；填错会导致全部测不通"
+                    android:text="强烈建议填写：填了才会验证 CF 能否回源到你的服务器，能挡掉「握手成功但一发数据就断」的 IP（免费套餐常见）。留空只验证是不是可用的 CF 节点。填错会导致全部测不通。"
                     android:textColor="@color/text_secondary"
                     android:textSize="11sp" />
 

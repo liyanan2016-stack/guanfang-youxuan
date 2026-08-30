@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -78,11 +79,13 @@ const (
 	verdictMismatched
 )
 
-// probeColo 探测单个 IP 的 colo 三字码。返回空串表示探不出来。
+// probeColo 探测单个 IP 的 colo 三字码。返回 (colo, 状态码)。
+// colo 为空表示探不出来，此时状态码无意义。
 //
-// 与 testRTT 的区别：只连一次、不计时、不重试。目的只有一个——拿 CF-RAY。
+// 与 testRTT 的区别：只连一次、不计时、不重试。目的只有两个——拿 CF-RAY，
+// 以及（填了 SNI 时）拿状态码判断能不能回源。
 // 单次失败就返回空（判为 unknown 而非 mismatched），由调用方降级处理。
-func probeColo(ip string, port int, useTLS bool, sni string) string {
+func probeColo(ip string, port int, useTLS bool, sni string) (string, int) {
 	if sni == "" {
 		if speedTestDomain != "" {
 			sni = speedTestDomain
@@ -95,7 +98,7 @@ func probeColo(ip string, port int, useTLS bool, sni string) string {
 	d := net.Dialer{Timeout: reconTimeout}
 	conn, err := d.DialContext(scanCtx(), "tcp", addr)
 	if err != nil {
-		return ""
+		return "", 0
 	}
 	conn.SetDeadline(time.Now().Add(reconTimeout * 2))
 
@@ -104,7 +107,7 @@ func probeColo(ip string, port int, useTLS bool, sni string) string {
 		tlsConn := tls.Client(conn, &tls.Config{ServerName: sni, InsecureSkipVerify: true})
 		if err := tlsConn.Handshake(); err != nil {
 			conn.Close()
-			return ""
+			return "", 0
 		}
 		rwc = tlsConn
 	}
@@ -112,21 +115,21 @@ func probeColo(ip string, port int, useTLS bool, sni string) string {
 	reqStr := "GET / HTTP/1.1\r\nHost: " + sni + "\r\nUser-Agent: Mozilla/5.0\r\nConnection: close\r\n\r\n"
 	if _, err := rwc.Write([]byte(reqStr)); err != nil {
 		rwc.Close()
-		return ""
+		return "", 0
 	}
 
 	resp, err := http.ReadResponse(bufio.NewReader(rwc), nil)
 	rwc.Close()
 	if err != nil {
-		return ""
+		return "", 0
 	}
 	resp.Body.Close()
 
 	cfRay := resp.Header.Get("CF-RAY")
 	if cfRay == "" {
-		return ""
+		return "", 0
 	}
-	return extractDataCenter(cfRay)
+	return extractDataCenter(cfRay), resp.StatusCode
 }
 
 // reconOne 侦察一个子网，返回结论和探到的 colo（探不到时 colo 为空）。
@@ -135,9 +138,20 @@ func reconOne(subnet string, ipType, port int, useTLS bool, sni string, filter s
 	if ip == "" {
 		return verdictUnknown, ""
 	}
-	colo := probeColo(ip, port, useTLS, sni)
+	colo, status := probeColo(ip, port, useTLS, sni)
 	if colo == "" {
 		return verdictUnknown, ""
+	}
+	// 填了 SNI 且 CF 明确回了「到不了你的源」（521/522/523 等）时排除整段。
+	//
+	// 免费套餐下部分 CF IP 段对某些运营商回源不通，而回源路径是按段路由的，
+	// 同一个 /24 的表现基本一致。既然侦察已经拿到了确定的错误码，就没必要
+	// 让这一段的每个 IP 都去 RTT 阶段各撞一次。
+	//
+	// 依据是「拿到了 CF-RAY + 明确的错误码」这个确定证据，不是探测失败的
+	// 猜测 —— 探测失败仍然走 unknown 降级，不会误杀。
+	if strings.TrimSpace(sni) != "" && !originReachable(status) {
+		return verdictMismatched, colo
 	}
 	country := countryOfColo(colo)
 	if country == "" {

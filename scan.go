@@ -810,6 +810,12 @@ const rttProbes = 3
 // 同时返回抖动（各次测量与均值的平均绝对偏差）：低延迟高抖动的 IP
 // 实际体验很差，只看平均值选不出来。
 func testRTT(ip string, port int, useTLS bool, sni string) (int, int, string, float64) {
+	// userSNI 记住这次验证用的是不是用户自己的域名。
+	//
+	// 这个区分决定了状态码怎么判：用用户域名请求时，响应码反映的是
+	// 「CF 能不能回源到用户的服务器」；用测速域名请求时，回源是 CF
+	// 自己的事，状态码说明不了用户节点的任何情况。
+	userSNI := strings.TrimSpace(sni) != ""
 	if sni == "" {
 		// 优先用测速域名，让验证与测速指向同一个目标
 		if speedTestDomain != "" {
@@ -878,6 +884,18 @@ func testRTT(ip string, port int, useTLS bool, sni string) (int, int, string, fl
 			// 不是 CF 节点，重试也不会变成 CF 节点
 			return 0, 0, "", 1.0
 		}
+		// 用用户自己的域名验证时必须查状态码。
+		//
+		// 这是 closed pipe 的真正来源：CF 回源失败时返回 521/522/523，
+		// 这些响应同样带 CF-RAY —— 只判 CF-RAY 存不存在，回源不通的 IP
+		// 会被报成"可用"，用户拿去接节点，握手过了、数据一发就断。
+		//
+		// 免费套餐尤其常见：部分 CF IP 段对某些运营商（用户实测是电信）
+		// 回源不通，而付费套餐和 Argo 隧道不受影响。同一个 IP 用
+		// cloudflaremirrors.com 测是 200，用用户域名测就是 523。
+		if userSNI && !originReachable(resp.StatusCode) {
+			return 0, 0, "", 1.0
+		}
 		colo = extractDataCenter(cfRay)
 		verified = true
 		samples = append(samples, tcpMs)
@@ -912,6 +930,38 @@ func testRTT(ip string, port int, useTLS bool, sni string) (int, int, string, fl
 	lossRate := float64(rttProbes-len(samples)) / float64(rttProbes)
 
 	return avg, jitter, colo, lossRate
+}
+
+// originReachable 判断「用用户域名请求」拿到的状态码是否说明 CF 能回源。
+//
+// 只在用户填了 SNI 时使用。分类依据是「这个响应是 CF 生成的，还是用户
+// 的源生成的」——只要响应来自源，回源链路就是通的，具体内容不重要。
+//
+//   - 2xx / 3xx：源正常响应或重定向 → 通
+//   - 101：WebSocket 已升级，隧道确实建立起来了 → 通（最硬的证据）
+//   - 400/404/405/410：源明确回答了「这个请求我不接」。对 WS/gRPC 节点
+//     来说根路径返回 404 是正常的 —— 恰恰证明 CF 摸到了源。
+//   - 403：可能是 WAF 拦、也可能是 zone 配置问题，两种都不该当可用节点
+//   - 521/522/523/524/525/526/530：CF 自己生成的回源错误页，回源断了 → 不通
+//   - 其他 5xx：源有问题，即使链路通也不适合作为优选目标
+//
+// 注意 404 必须放行：它和 52x 的区别是「谁生成的这个响应」。404 来自源，
+// 52x 来自 CF。把 404 判死会让所有 WS 节点（根路径无内容）全军覆没。
+func originReachable(code int) bool {
+	switch {
+	case code == 101:
+		return true
+	case code >= 200 && code < 400:
+		return true
+	case code == 400 || code == 404 || code == 405 || code == 410:
+		return true
+	default:
+		// 403、52x、其他 5xx 以及一切未列出的都判不可用。
+		// 白名单而非黑名单：漏掉一个 CF 新增的错误码只会让判定偏保守
+		// （少给一个 IP），漏掉的如果是错误码却当成可用，用户又要遇到
+		// closed pipe —— 两种代价不对称。
+		return false
+	}
 }
 
 // runRTTTest 对候选 IP × 端口做 RTT 测试。

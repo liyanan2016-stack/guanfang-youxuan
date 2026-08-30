@@ -28,7 +28,7 @@ func TestReconOneUnknownOnBadSubnet(t *testing.T) {
 func TestProbeColoUnreachable(t *testing.T) {
 	freshTask(t)
 	// 保留地址，连不通。必须返回空串而不是 panic 或阻塞
-	if colo := probeColo("192.0.2.1", 443, true, "example.com"); colo != "" {
+	if colo, _ := probeColo("192.0.2.1", 443, true, "example.com"); colo != "" {
 		t.Errorf("probeColo unreachable = %q want empty", colo)
 	}
 }
