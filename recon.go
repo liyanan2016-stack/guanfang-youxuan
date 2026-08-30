@@ -52,6 +52,18 @@ type batchSampler interface {
 // 大约是 3% 一刀，命中率 1% 的窄地区也能在几刀内攒出一批。
 const reconChunkSize = 200
 
+// reconMaxChunksPerBatch 一次 next() 最多连续侦察几刀就必须交货。
+//
+// 为什么需要：原来 next() 会一直侦察到攒满整批（sampleSize=100 个命中
+// 子网）才返回。选了冷门地区时命中率可能低于 1%，攒满要把六千多个子网
+// 几乎探一遍 —— 期间 RTT 一个没跑、轮次号停在 1、界面只有侦察计数在动，
+// 用户看着就是「卡在第一轮」。
+//
+// 改成探够 3 刀（600 个子网）就先拿现有命中去测：哪怕只有十几个子网，
+// 也能立刻进 RTT 和测速，用户几十秒内就看到实质进展。攒不满不影响正确性，
+// 外层本来就是多轮循环，下一轮会继续从剩下的子网里侦察。
+const reconMaxChunksPerBatch = 3
+
 // reconTimeout 单次侦察探测的超时。
 //
 // 比 RTT 的 1s + 3s 更短：侦察只要「这个 IP 属于哪个机房」，不需要精确
@@ -293,6 +305,10 @@ type regionSampler struct {
 	unknown []string
 	stats   reconStats
 
+	// maxChunks 一次 next() 最多连续侦察几刀。默认取
+	// reconMaxChunksPerBatch，测试里会调小以便验证提前交货的行为。
+	maxChunks int
+
 	// usedUnknown 记录是否已经开始动用候补池，只为了提示文案不重复刷。
 	usedUnknown bool
 }
@@ -304,6 +320,7 @@ func newRegionSampler(
 	return &regionSampler{
 		base: base, ipType: ipType, port: port, useTLS: useTLS,
 		sni: sni, filter: filter, taskNum: taskNum,
+		maxChunks: reconMaxChunksPerBatch,
 	}
 }
 
@@ -316,8 +333,21 @@ func (r *regionSampler) next(n int) []string {
 		return nil
 	}
 
-	// 命中池不够就继续侦察，直到攒够 n 个或子网池见底
+	// 命中池不够就继续侦察，但最多连续探 reconMaxChunksPerBatch 刀就交货：
+	// 攒不满也要让 RTT 尽快跑起来，否则窄地区下界面长时间只有侦察在动。
+	//
+	// 注意配额只在「已经有命中」时才生效。一个都没命中就交货会直接掉进
+	// 下面的候补池分支，把待定子网当命中用 —— 那是子网池探完时的兜底，
+	// 不该因为提前交货而提前触发。
+	chunks := 0
+	limit := r.maxChunks
+	if limit <= 0 {
+		limit = reconMaxChunksPerBatch
+	}
 	for len(r.matched) < n {
+		if len(r.matched) > 0 && chunks >= limit {
+			break
+		}
 		if isCancelled() {
 			break
 		}
@@ -325,15 +355,22 @@ func (r *regionSampler) next(n int) []string {
 		if chunk == nil {
 			break
 		}
-		setProgress(fmt.Sprintf("地区侦察：正在探测 %d 个子网的落地机房（累计 %d/%d）...",
+		chunks++
+		setScanProgress(fmt.Sprintf("地区侦察：正在探测 %d 个子网的落地机房（累计 %d/%d）...",
 			len(chunk), r.base.used(), r.base.total()))
 
 		m, u := reconChunk(chunk, r.ipType, r.port, r.useTLS, r.sni, r.filter, r.taskNum, &r.stats)
 		r.matched = append(r.matched, m...)
 		r.unknown = append(r.unknown, u...)
 
-		setProgress(fmt.Sprintf("地区侦察：已探测 %d 个子网，命中 %d 个，排除 %d 个，待定 %d 个",
-			r.stats.probed, r.stats.matched, r.stats.mismatched, r.stats.unknown))
+		// 命中率让用户对「还要攒多久」有预期：命中的子网越多，
+		// 剩余需要侦察的量就越少，扫完地区的总时长是可以大致估的。
+		rate := ""
+		if r.stats.probed > 0 {
+			rate = fmt.Sprintf("，命中率 %.1f%%", float64(r.stats.matched)/float64(r.stats.probed)*100)
+		}
+		setScanProgress(fmt.Sprintf("地区侦察：已探测 %d/%d 个子网，命中 %d 个，排除 %d 个，待定 %d 个%s",
+			r.stats.probed, r.base.total(), r.stats.matched, r.stats.mismatched, r.stats.unknown, rate))
 	}
 
 	if len(r.matched) > 0 {
@@ -350,7 +387,7 @@ func (r *regionSampler) next(n int) []string {
 	if len(r.unknown) > 0 {
 		if !r.usedUnknown {
 			r.usedUnknown = true
-			setProgress(fmt.Sprintf("所选地区命中的子网已用尽，改用 %d 个待定子网继续（地区仍会在 RTT 阶段复检）...",
+			setScanProgress(fmt.Sprintf("所选地区命中的子网已用尽，改用 %d 个待定子网继续（地区仍会在 RTT 阶段复检）...",
 				len(r.unknown)))
 		}
 		take := n

@@ -324,7 +324,13 @@ final class Anim {
 
     /** 数值刷新时的轻微脉冲，用于结果指标从旧值换成新值。 */
     static void pulse(View view) {
+        if (view == null) return;
         view.animate().cancel();
+        // cancel 可能掐掉一条还没跑完的淡入（staggerIn 挂的是带 startDelay 的
+        // 动画，延迟阶段被 cancel 就永远不会把 alpha 拉回 1），所以这里
+        // 强制复位可见性。脉冲的前提是这个值本来就该看得见。
+        view.setAlpha(1f);
+        view.setTranslationY(0f);
         view.setScaleX(1.06f);
         view.setScaleY(1.06f);
         view.animate()

@@ -1045,8 +1045,10 @@ func runRTTTest(cands []candidateIP, ports []int, taskNum int, useTLS bool, sni 
 				count++
 				current := count
 				mu.Unlock()
-				if current%10 == 0 || current == total {
-					setProgress(fmt.Sprintf("RTT 测试进度: %d/%d", current, total))
+				// 每 5 个刷一次而不是 10：一批候选可能几百上千个，
+				// 10 的粒度在窄地区下间隔偏长，用户会以为卡住。
+				if current%5 == 0 || current == total {
+					setScanProgress(fmt.Sprintf("RTT 测试进度: %d/%d", current, total))
 				}
 			}()
 
@@ -1121,10 +1123,10 @@ collect:
 		diversityNote = fmt.Sprintf("，同机房超额剔除 %d 个", dropped)
 	}
 	if len(results) > len(kept) {
-		setProgress(fmt.Sprintf("RTT 测试完成，%d/%d 个 IP 有效%s%s，保留 %d 个进入测速",
+		setScanProgress(fmt.Sprintf("RTT 测试完成，%d/%d 个 IP 有效%s%s，保留 %d 个进入测速",
 			len(results), total, skipNote, diversityNote, len(kept)))
 	} else {
-		setProgress(fmt.Sprintf("RTT 测试完成，%d/%d 个 IP 有效%s", len(results), total, skipNote))
+		setScanProgress(fmt.Sprintf("RTT 测试完成，%d/%d 个 IP 有效%s", len(results), total, skipNote))
 	}
 	return kept
 }
@@ -1426,7 +1428,7 @@ func speedTestRound(cands []RTTResult, useTLS bool, target int, wantCount int,
 			if isCancelled() {
 				return testOutcome{}, true
 			}
-			setProgress(fmt.Sprintf("快速预筛 %d/%d：%s:%d (延迟 %dms 抖动 %dms)",
+			setScanProgress(fmt.Sprintf("快速预筛 %d/%d：%s:%d (延迟 %dms 抖动 %dms)",
 				i+1, len(cands), r.IP, r.Port, r.LatencyMs, r.JitterMs))
 			// target 传 0：预筛不做「达不到就放弃」的判断，
 			// 这么短的观察期内谁快谁慢还说不准
@@ -1455,7 +1457,7 @@ func speedTestRound(cands []RTTResult, useTLS bool, target int, wantCount int,
 		if len(finalists) == 0 {
 			finalists = cands[:min(wantFinalists, len(cands))]
 		}
-		setProgress(fmt.Sprintf("预筛完成，%d 个候选中挑出 %d 个做完整测速",
+		setScanProgress(fmt.Sprintf("预筛完成，%d 个候选中挑出 %d 个做完整测速",
 			len(cands), len(finalists)))
 	}
 
@@ -1466,10 +1468,10 @@ func speedTestRound(cands []RTTResult, useTLS bool, target int, wantCount int,
 		}
 
 		if wantCount > 1 {
-			setProgress(fmt.Sprintf("正在测速 %d/%d：%s:%d (已找到 %d/%d 个达标)",
+			setScanProgress(fmt.Sprintf("正在测速 %d/%d：%s:%d (已找到 %d/%d 个达标)",
 				i+1, len(finalists), r.IP, r.Port, pool.qualified(target), wantCount))
 		} else {
-			setProgress(fmt.Sprintf("正在测速 %d/%d：%s:%d (延迟 %dms 抖动 %dms)",
+			setScanProgress(fmt.Sprintf("正在测速 %d/%d：%s:%d (延迟 %dms 抖动 %dms)",
 				i+1, len(finalists), r.IP, r.Port, r.LatencyMs, r.JitterMs))
 		}
 		// 用 RTT 阶段测通的那个端口测速，不能回落到 80/443 ——
@@ -1486,7 +1488,7 @@ func speedTestRound(cands []RTTResult, useTLS bool, target int, wantCount int,
 			dcName = lookupDataCenter(dc)
 		}
 		cca2 := countryOfColo(dc)
-		setProgress(fmt.Sprintf("%s:%d 峰值速度 %d kB/s, 数据中心 %s", r.IP, r.Port, maxSpeed, dcName))
+		setScanProgress(fmt.Sprintf("%s:%d 峰值速度 %d kB/s, 数据中心 %s", r.IP, r.Port, maxSpeed, dcName))
 
 		pool.add(speedResult{
 			IP: r.IP, Port: r.Port, MaxSpeed: maxSpeed, LatencyMs: tcpMs,
@@ -1595,6 +1597,7 @@ func cloudflareTest(ipType int, useTLS bool, taskNum int, speed int, filter scan
 	wantCount = normalizeResultCount(wantCount)
 	pool := newResultPool(wantCount)
 	initLocations()
+	markScanStart()
 	if isCancelled() {
 		return testOutcome{}
 	}
@@ -1612,7 +1615,7 @@ func cloudflareTest(ipType int, useTLS bool, taskNum int, speed int, filter scan
 		setProgress("子网列表为空，请点击「更新数据」重新下载")
 		return testOutcome{}
 	}
-	setProgress(fmt.Sprintf("正在从 %d 个子网中随机生成 IP...", len(ipList)))
+	setScanProgress(fmt.Sprintf("正在从 %d 个子网中随机生成 IP...", len(ipList)))
 
 	batchSize := sampleSize
 	if len(ipList) < batchSize {
@@ -1658,7 +1661,7 @@ func cloudflareTest(ipType int, useTLS bool, taskNum int, speed int, filter scan
 			if sampler.used() >= minSubnets || sampler.used() >= sampler.total() {
 				break
 			}
-			setProgress(fmt.Sprintf("已跑满 %d 轮但仅覆盖 %d/%d 个子网，继续扫描以提高覆盖率...",
+			setScanProgress(fmt.Sprintf("已跑满 %d 轮但仅覆盖 %d/%d 个子网，继续扫描以提高覆盖率...",
 				maxScanRounds, sampler.used(), sampler.total()))
 		}
 		if isCancelled() {
@@ -1670,6 +1673,10 @@ func cloudflareTest(ipType int, useTLS bool, taskNum int, speed int, filter scan
 		// 整批 RTT 全丢包时继续取下一批，直到有结果或子网取完。
 		// 随机拼出来的 IP 大部分是死的，这个重试是必要的，
 		// 但必须有出口——原版这里是 for{} 无上限。
+		//
+		// batchNo 是轮次内的「第几批」：轮次号只在测速后不变就停住，
+		// 而地区选中时一批全灭换下一批是常态，批号一直在涨 = 进度在走。
+		batchNo := 0
 		for {
 			sampled := sampler.next(batchSize)
 			if sampled == nil {
@@ -1677,6 +1684,7 @@ func cloudflareTest(ipType int, useTLS bool, taskNum int, speed int, filter scan
 				break
 			}
 			roundsRun = round
+			batchNo++
 
 			var testIPs []candidateIP
 			if ipType == 6 {
@@ -1685,8 +1693,8 @@ func cloudflareTest(ipType int, useTLS bool, taskNum int, speed int, filter scan
 				testIPs = getRandomIPv4s(sampled)
 			}
 
-			setProgress(fmt.Sprintf("第 %d 轮：%d 个子网 × %d IP × %d 端口 = %d 个候选（累计 %d/%d 子网），开始 RTT 测试...",
-				round, len(sampled), ipsPerSubnet, len(ports), len(testIPs)*len(ports),
+			setScanProgress(fmt.Sprintf("第 %d 轮·第 %d 批：%d 个子网 × %d IP × %d 端口 = %d 个候选（累计侦察 %d/%d 子网），RTT 测试中...",
+				round, batchNo, len(sampled), ipsPerSubnet, len(ports), len(testIPs)*len(ports),
 				sampler.used(), sampler.total()))
 
 			rttResults = runRTTTest(testIPs, ports, taskNum, useTLS, sni, filter, wantCount)
@@ -1697,9 +1705,11 @@ func cloudflareTest(ipType int, useTLS bool, taskNum int, speed int, filter scan
 				break
 			}
 			if len(filter.Countries) > 0 {
-				setProgress("当前这批 IP 都不可用或不在所选地区，换下一批子网继续...")
+				setScanProgress(fmt.Sprintf("第 %d 轮·第 %d 批无可达/不在所选地区的 IP，继续下一批（累计侦察 %d/%d 子网）...",
+					round, batchNo, sampler.used(), sampler.total()))
 			} else {
-				setProgress("当前这批 IP 都存在 RTT 丢包，换下一批子网继续...")
+				setScanProgress(fmt.Sprintf("第 %d 轮·第 %d 批存在 RTT 丢包，继续下一批（累计侦察 %d/%d 子网）...",
+					round, batchNo, sampler.used(), sampler.total()))
 			}
 		}
 
@@ -1746,10 +1756,10 @@ func cloudflareTest(ipType int, useTLS bool, taskNum int, speed int, filter scan
 		}
 
 		if wantCount > 1 {
-			setProgress(fmt.Sprintf("第 %d 轮结束（本轮最快 %d kB/s，累计达标 %d/%d 个），继续下一轮...",
+			setScanProgress(fmt.Sprintf("第 %d 轮结束（本轮最快 %d kB/s，累计达标 %d/%d 个），继续下一轮...",
 				round, roundBest.MaxSpeed, pool.qualified(speed), wantCount))
 		} else {
-			setProgress(fmt.Sprintf("第 %d 轮未达到期望带宽（本轮最快 %d kB/s），继续下一轮...",
+			setScanProgress(fmt.Sprintf("第 %d 轮未达到期望带宽（本轮最快 %d kB/s），继续下一轮...",
 				round, roundBest.MaxSpeed))
 		}
 	}

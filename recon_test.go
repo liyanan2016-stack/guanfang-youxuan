@@ -155,6 +155,56 @@ func TestRegionSamplerRespectsCancel(t *testing.T) {
 	freshTask(t)
 }
 
+// ---- 提前交货配额 ----
+
+// 已经有命中子网时，一次 next() 不能为了攒满整批而无限侦察下去：
+// 探满配额就要把手上的命中交出去，让 RTT 尽快跑起来。
+// 这是「选了地区后长时间停在第一轮」的直接修复点。
+func TestRegionSamplerYieldsAfterChunkQuota(t *testing.T) {
+	freshTask(t)
+	subnets := make([]string, 0, reconChunkSize*3)
+	for i := 0; i < reconChunkSize*3; i++ {
+		subnets = append(subnets, "192.0.2.0/24")
+	}
+	rs := newRegionSampler(
+		newSubnetSampler(subnets), 4, 443, true, "example.com",
+		scanFilter{Countries: parseCountriesCSV("HK")}, 100,
+	)
+	rs.maxChunks = 1
+	// 预置一个命中，模拟「已经有货可交」
+	rs.matched = []string{"203.0.113.0/24"}
+
+	batch := rs.next(50)
+	if len(batch) != 1 {
+		t.Fatalf("next = %v want the 1 pre-seeded matched subnet", batch)
+	}
+	// 只允许探一刀就交货，不能把整个池子探完
+	if rs.stats.probed != reconChunkSize {
+		t.Errorf("probed=%d want %d (quota must stop further recon)", rs.stats.probed, reconChunkSize)
+	}
+}
+
+// 一个命中都没有时配额不生效：此时提前交货会掉进候补池分支，
+// 把「待定」当「命中」用，那是池子探完才该有的兜底行为。
+func TestRegionSamplerQuotaInactiveWithoutMatch(t *testing.T) {
+	freshTask(t)
+	subnets := make([]string, 0, reconChunkSize*2)
+	for i := 0; i < reconChunkSize*2; i++ {
+		subnets = append(subnets, "192.0.2.0/24")
+	}
+	rs := newRegionSampler(
+		newSubnetSampler(subnets), 4, 443, true, "example.com",
+		scanFilter{Countries: parseCountriesCSV("HK")}, 200,
+	)
+	rs.maxChunks = 1
+
+	rs.next(50)
+	if rs.stats.probed != len(subnets) {
+		t.Errorf("probed=%d want %d (no match => must keep probing to pool end)",
+			rs.stats.probed, len(subnets))
+	}
+}
+
 func TestReconChunkEmptyInput(t *testing.T) {
 	freshTask(t)
 	var st reconStats

@@ -7,6 +7,7 @@ import (
 	"net"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // ScanResult 扫描结果
@@ -72,7 +73,7 @@ func ResultCounts() string { return joinInts(allowedResultCounts) }
 // Version 返回核心层版本号，供界面显示
 func Version() string { return libVersion }
 
-const libVersion = "1.15"
+const libVersion = "1.16"
 
 // HTTPPorts 返回明文模式可选端口的 CSV，供界面构建选项
 func HTTPPorts() string { return joinInts(cfHTTPPorts) }
@@ -103,6 +104,40 @@ func GetProgress() string {
 
 func setProgress(s string) {
 	progressMu.Lock()
+	progress = s
+	progressMu.Unlock()
+}
+
+// scanStarted 记录本次扫描的启动时刻，用于进度文案附上「已用时间」。
+//
+// 为什么需要：地区侦察和窄地区换批都可能让一次扫描在「第 1 轮」停留
+// 几分钟。轮次号不变不等于卡死，但用户看不到「在动」的证据就会反复
+// 问「卡了吗」。给每一条进度消息都附上累计用时，秒数一直在涨，
+// 就是最直观的「没死，在推进」信号。
+//
+// 由 progressMu 保护：写在扫描启动的那个 goroutine，读在几十个 RTT
+// worker 的进度回调里，不加锁就是数据竞争。
+var scanStarted time.Time
+
+// markScanStart 在一次扫描开始时重置计时基点。
+func markScanStart() {
+	progressMu.Lock()
+	scanStarted = time.Now()
+	progressMu.Unlock()
+}
+
+// setScanProgress 设置扫描相关进度，自动附加「已用 Xs」。
+//
+// 只在扫描流程里使用（cloudflareTest 及其调用链），数据更新、解锁等
+// 其他任务仍走 setProgress，避免时间戳含义错位。
+func setScanProgress(s string) {
+	progressMu.Lock()
+	if !scanStarted.IsZero() {
+		elapsed := int(time.Since(scanStarted).Seconds())
+		if elapsed > 0 {
+			s = fmt.Sprintf("%s（已用 %d 秒）", s, elapsed)
+		}
+	}
 	progress = s
 	progressMu.Unlock()
 }
