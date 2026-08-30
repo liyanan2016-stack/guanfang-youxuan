@@ -17,6 +17,7 @@ import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputMethodManager;
 import android.widget.Button;
 import android.widget.EditText;
+import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ProgressBar;
 import android.widget.RadioButton;
@@ -57,7 +58,7 @@ public class MainActivity extends AppCompatActivity {
     private TextView txtProgressTitle;
     private TextView txtProgress;
     private TextView txtResult;
-    private TextView txtThemeMode;
+    private ImageView txtThemeMode;
     private TextView txtIpValue;
     private TextView txtTargetBandwidth;
     private TextView txtRealBandwidth;
@@ -70,13 +71,11 @@ public class MainActivity extends AppCompatActivity {
     // 三个分页与底部导航。分页靠 visibility 切换而不是重建视图：
     // 切页不能丢掉已填的输入和滚动位置，更不能打断正在跑的扫描。
     private View pageScan;
-    private View pageConfig;
     private View pageHistory;
     private View navScan;
-    private View navConfig;
     private View navHistory;
     private TextView txtPageTitle;
-    /** 0=扫描 1=配置 2=历史。 */
+    /** 0=优选（参数+扫描+结果） 1=历史。 */
     private int currentTab = 0;
     private View layoutProgress;
     private View layoutResult;
@@ -156,15 +155,12 @@ public class MainActivity extends AppCompatActivity {
         txtElapsed = findViewById(R.id.txtElapsed);
         txtEmptyHistory = findViewById(R.id.txtEmptyHistory);
         pageScan = findViewById(R.id.pageScan);
-        pageConfig = findViewById(R.id.pageConfig);
         pageHistory = findViewById(R.id.pageHistory);
         navScan = findViewById(R.id.navScan);
-        navConfig = findViewById(R.id.navConfig);
         navHistory = findViewById(R.id.navHistory);
         txtPageTitle = findViewById(R.id.txtPageTitle);
         navScan.setOnClickListener(v -> selectTab(0));
-        navConfig.setOnClickListener(v -> selectTab(1));
-        navHistory.setOnClickListener(v -> selectTab(2));
+        navHistory.setOnClickListener(v -> selectTab(1));
         layoutHistoryList = findViewById(R.id.layoutHistoryList);
         // 放在所有 findViewById 之后：selectTab 会碰到分页内的视图
         selectTab(0);
@@ -669,38 +665,41 @@ public class MainActivity extends AppCompatActivity {
     }
 
     /**
-     * 切换分页。0=扫描 1=配置 2=历史。
+     * 切换分页。0=优选 1=历史。
      *
-     * <p>三页始终存在，只切 visibility：切页不能丢掉用户已填的节点域名、
+     * <p>两页始终存在，只切 visibility：切页不能丢掉用户已填的节点域名、
      * 端口选择和滚动位置，更不能打断正在跑的扫描。
      */
     private void selectTab(int tab) {
         currentTab = tab;
         pageScan.setVisibility(tab == 0 ? View.VISIBLE : View.GONE);
-        pageConfig.setVisibility(tab == 1 ? View.VISIBLE : View.GONE);
-        pageHistory.setVisibility(tab == 2 ? View.VISIBLE : View.GONE);
+        pageHistory.setVisibility(tab == 1 ? View.VISIBLE : View.GONE);
 
         highlightNav(navScan, R.id.navScanIcon, R.id.navScanLabel, tab == 0);
-        highlightNav(navConfig, R.id.navConfigIcon, R.id.navConfigLabel, tab == 1);
-        highlightNav(navHistory, R.id.navHistoryIcon, R.id.navHistoryLabel, tab == 2);
+        highlightNav(navHistory, R.id.navHistoryIcon, R.id.navHistoryLabel, tab == 1);
 
         if (tab == 0) {
-            txtPageTitle.setText("CF 优选 IP");
-        } else if (tab == 1) {
-            txtPageTitle.setText("扫描配置");
+            txtPageTitle.setText("官方优选");
         } else {
             txtPageTitle.setText("历史记录");
-            // 进历史页时刷一次：扫描可能在别的页面完成
+            // 进历史页时刷一次：扫描可能在切页之后才完成
             renderHistory();
         }
     }
 
-    /** 选中的导航项文字用主色，未选中用次要色。图标只改透明度。 */
+    /**
+     * 高亮选中的导航项。
+     *
+     * <p>图标和文字都用 {@code @color/nav_icon} 这个 selector 着色，
+     * 靠 {@code setSelected} 驱动 —— 和端口/地区筹码的选中态同一套机制，
+     * 不用在代码里写死颜色。
+     */
     private void highlightNav(View item, int iconId, int labelId, boolean active) {
-        TextView icon = item.findViewById(iconId);
+        item.setSelected(active);
+        ImageView icon = item.findViewById(iconId);
         TextView label = item.findViewById(labelId);
-        icon.setAlpha(active ? 1f : 0.45f);
-        label.setTextColor(getColor(active ? R.color.primary : R.color.text_secondary));
+        icon.setSelected(active);
+        label.setSelected(active);
         label.setTypeface(null, active ? android.graphics.Typeface.BOLD : android.graphics.Typeface.NORMAL);
     }
 
@@ -718,10 +717,15 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private static int themeModeIndex = 0; // 0=system, 1=day, 2=night
-    private static final String[] THEME_LABELS = {"🌓", "☀️", "🌙"};
+    // 矢量图标而不是 emoji：emoji 的字形取决于系统字体，颜色和字重
+    // 都不受控，跟这套自绘的扁平描边界面对不上。
+    private static final int[] THEME_ICONS = {
+            R.drawable.ic_theme_auto, R.drawable.ic_theme_day, R.drawable.ic_theme_night};
+    /** 图标没有文字，切换后靠 Toast 告诉用户切到了哪一档。 */
+    private static final String[] THEME_NAMES = {"跟随系统", "浅色", "深色"};
 
     private void updateThemeLabel() {
-        txtThemeMode.setText(THEME_LABELS[themeModeIndex]);
+        txtThemeMode.setImageResource(THEME_ICONS[themeModeIndex]);
     }
 
     private void cycleThemeMode() {
@@ -735,7 +739,7 @@ public class MainActivity extends AppCompatActivity {
             default: AppCompatDelegate.setDefaultNightMode(AppCompatDelegate.MODE_NIGHT_FOLLOW_SYSTEM); break;
         }
         updateThemeLabel();
-        showToast("主题: " + THEME_LABELS[themeModeIndex]);
+        showToast("主题：" + THEME_NAMES[themeModeIndex]);
     }
 
     private void showStructuredResult(String address, int bandwidth, int realBandwidth,

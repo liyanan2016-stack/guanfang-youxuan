@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 底部导航图标/文字着色。选中用主色，未选中用次要色，
+     与 chip 和 segmented 的选中态语言一致。 -->
+<selector xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:color="@color/primary" android:state_selected="true" />
+    <item android:color="@color/text_secondary" />
+</selector>

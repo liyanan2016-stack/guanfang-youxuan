@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 线性描边图标，与项目里 chip / segmented / card 的扁平描边风格一致。
+     不用 emoji：emoji 的渲染取决于系统字体，同一个符号在不同机器上
+     颜色、粗细、字重都不一样，和这套自绘的扁平界面对不上。 -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="20dp"
+    android:height="20dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24"
+    android:tint="@color/nav_icon">
+    <path
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="1.6"
+        android:fillColor="#00000000"
+        android:pathData="M12,3.5a8.5,8.5 0 1,0 0.001,0z" />
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M12,3.5a8.5,8.5 0 0,1 0,17z" />
+</vector>
