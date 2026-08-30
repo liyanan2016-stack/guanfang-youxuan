@@ -50,6 +50,15 @@ public class MainActivity extends AppCompatActivity {
     private FlowLayout layoutPorts;
     private FlowLayout layoutRegions;
     private TextView txtPortHint;
+    // 端口 / 地区折叠区
+    private View headerPorts;
+    private View boxPorts;
+    private View arrowPorts;
+    private TextView txtPortsSummary;
+    private View headerRegions;
+    private View boxRegions;
+    private View arrowRegions;
+    private TextView txtRegionsSummary;
     private Button btnScan;
     private Button btnCancel;
     private Button btnUpdate;
@@ -98,6 +107,9 @@ public class MainActivity extends AppCompatActivity {
     private static final String PREFS_REGIONS = "regions";
     private static final String PREFS_COUNTRIES_EXTRA = "countries_extra";
     private static final String PREFS_SNI = "sni";
+    // 折叠状态也要记：改过端口的人下次多半还想看到它
+    private static final String PREFS_PORTS_OPEN = "ports_open";
+    private static final String PREFS_REGIONS_OPEN = "regions_open";
     private static final int MAX_HISTORY = 10;
 
     /**
@@ -135,6 +147,14 @@ public class MainActivity extends AppCompatActivity {
         layoutPorts = findViewById(R.id.layoutPorts);
         layoutRegions = findViewById(R.id.layoutRegions);
         txtPortHint = findViewById(R.id.txtPortHint);
+        headerPorts = findViewById(R.id.headerPorts);
+        boxPorts = findViewById(R.id.boxPorts);
+        arrowPorts = findViewById(R.id.arrowPorts);
+        txtPortsSummary = findViewById(R.id.txtPortsSummary);
+        headerRegions = findViewById(R.id.headerRegions);
+        boxRegions = findViewById(R.id.boxRegions);
+        arrowRegions = findViewById(R.id.arrowRegions);
+        txtRegionsSummary = findViewById(R.id.txtRegionsSummary);
         btnScan = findViewById(R.id.btnScan);
         btnCancel = findViewById(R.id.btnCancel);
         btnUpdate = findViewById(R.id.btnUpdate);
@@ -159,8 +179,14 @@ public class MainActivity extends AppCompatActivity {
         navScan = findViewById(R.id.navScan);
         navHistory = findViewById(R.id.navHistory);
         txtPageTitle = findViewById(R.id.txtPageTitle);
-        navScan.setOnClickListener(v -> selectTab(0));
-        navHistory.setOnClickListener(v -> selectTab(1));
+        navScan.setOnClickListener(v -> {
+            Anim.tapBounce(v.findViewById(R.id.navScanIcon));
+            selectTab(0);
+        });
+        navHistory.setOnClickListener(v -> {
+            Anim.tapBounce(v.findViewById(R.id.navHistoryIcon));
+            selectTab(1);
+        });
         layoutHistoryList = findViewById(R.id.layoutHistoryList);
         // 放在所有 findViewById 之后：selectTab 会碰到分页内的视图
         selectTab(0);
@@ -178,7 +204,13 @@ public class MainActivity extends AppCompatActivity {
         }
         updateThemeLabel();
 
-        txtThemeMode.setOnClickListener(v -> cycleThemeMode());
+        txtThemeMode.setOnClickListener(v -> {
+            // 图标自转半圈：三态循环（跟随系统/浅色/深色）光靠换图标不明显，
+            // 加个旋转让人确认自己点到了
+            v.animate().rotationBy(180f).setDuration(Anim.DUR_COLLAPSE)
+                    .setInterpolator(Anim.EASE_OUT).start();
+            cycleThemeMode();
+        });
         txtIpValue.setOnClickListener(v -> copyCurrentIp());
         editBandwidth.setOnEditorActionListener((v, actionId, event) -> {
             if (actionId == EditorInfo.IME_ACTION_DONE) {
@@ -197,9 +229,13 @@ public class MainActivity extends AppCompatActivity {
 
         // 扫描与取消分成两个按钮。原来共用一个按钮，扫描中按钮变成"停止扫描"，
         // 用户想再点一次开始扫描时容易误取消，取消完还要再点一次才开始。
+        Anim.attachPressScale(btnScan);
         btnScan.setOnClickListener(v -> startScan());
         btnCancel.setOnClickListener(v -> cancelCurrentTask());
-        btnUpdate.setOnClickListener(v -> updateData());
+        btnUpdate.setOnClickListener(v -> {
+            Anim.tapBounce(v);
+            updateData();
+        });
         btnClearHistory.setOnClickListener(v -> clearScanHistory());
 
         // TLS 开关切换时端口集合完全不同（80 系 vs 443 系），必须重建。
@@ -208,7 +244,138 @@ public class MainActivity extends AppCompatActivity {
         renderRegionChips();
         rebuildPortChips();
 
+        setupCollapsibles();
+
         renderHistory();
+        playEntryAnimation();
+    }
+
+    /**
+     * 启动时首页的卡片依次冒出。
+     *
+     * <p>要等一帧再跑（{@code post}）：onCreate 里视图还没测量，
+     * 此时 {@code getVisibility} 可读但位置全是 0，动画会从错误的偏移开始。
+     *
+     * <p>只做一次，不在 onResume 里重播 —— 从后台切回来还要看一遍卡片飞入，
+     * 第三次就开始烦人了。
+     */
+    private void playEntryAnimation() {
+        final View content = findViewById(R.id.scanContent);
+        content.post(() -> {
+            java.util.List<View> cards = new java.util.ArrayList<>();
+            if (content instanceof ViewGroup) {
+                ViewGroup g = (ViewGroup) content;
+                for (int i = 0; i < g.getChildCount(); i++) {
+                    cards.add(g.getChildAt(i));
+                }
+            }
+            Anim.staggerIn(cards.toArray(new View[0]), 55);
+        });
+    }
+
+    /**
+     * 装折叠区。端口和地区各一块，行为完全一样，所以走同一个 helper。
+     *
+     * <p>默认收起 —— 绝大多数人用默认的 443 + 不限地区，这两块展开要占掉
+     * 大半屏。但改过的人下次多半还想看到，所以展开状态存进 prefs。
+     *
+     * <p>首次进来不能走动画：{@link Anim#expand} 要靠父容器已测量出的宽度
+     * 来算目标高度，onCreate 阶段宽度还是 0，会量成一行高然后把 chip 裁掉。
+     * 所以初始状态直接设 visibility。
+     */
+    private void setupCollapsibles() {
+        boolean portsOpen = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+                .getBoolean(PREFS_PORTS_OPEN, false);
+        boolean regionsOpen = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+                .getBoolean(PREFS_REGIONS_OPEN, false);
+
+        boxPorts.setVisibility(portsOpen ? View.VISIBLE : View.GONE);
+        arrowPorts.setRotation(portsOpen ? 180f : 0f);
+        boxRegions.setVisibility(regionsOpen ? View.VISIBLE : View.GONE);
+        arrowRegions.setRotation(regionsOpen ? 180f : 0f);
+
+        headerPorts.setOnClickListener(v ->
+                toggleSection(boxPorts, arrowPorts, PREFS_PORTS_OPEN));
+        headerRegions.setOnClickListener(v ->
+                toggleSection(boxRegions, arrowRegions, PREFS_REGIONS_OPEN));
+
+        // 自由输入的地区代码也算在摘要里，不然收起后看到的是过时的值
+        editCountries.addTextChangedListener(new android.text.TextWatcher() {
+            @Override
+            public void beforeTextChanged(CharSequence sq, int st, int c, int a) {
+            }
+
+            @Override
+            public void onTextChanged(CharSequence sq, int st, int b, int c) {
+            }
+
+            @Override
+            public void afterTextChanged(android.text.Editable e) {
+                updateRegionsSummary();
+            }
+        });
+
+        updatePortsSummary();
+        updateRegionsSummary();
+    }
+
+    private void toggleSection(View box, View arrow, String prefKey) {
+        boolean willOpen = box.getVisibility() != View.VISIBLE;
+        // 动画正在跑时 expand/collapse 会拒绝并返回 false；此时箭头和 prefs
+        // 都不能改，否则连点两下箭头会停在和实际状态相反的方向。
+        boolean accepted = willOpen ? Anim.expand(box) : Anim.collapse(box);
+        if (!accepted) return;
+        Anim.rotateArrow(arrow, willOpen);
+        getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+                .edit().putBoolean(prefKey, willOpen).apply();
+    }
+
+    /**
+     * 收起状态下标题行右侧显示当前选中的端口。
+     *
+     * <p>折叠不能把信息藏掉 —— 用户不展开也得知道现在测的是哪些端口，
+     * 否则扫出来的 IP 接不上节点时根本无从排查。
+     */
+    private void updatePortsSummary() {
+        if (txtPortsSummary == null) return;
+        if (selectedPorts.isEmpty()) {
+            txtPortsSummary.setText(checkTLS.isChecked() ? "443" : "80");
+            return;
+        }
+        StringBuilder sb = new StringBuilder();
+        int i = 0;
+        for (int p : selectedPorts) {
+            // 超过 3 个就省略，否则摘要会把标题挤掉
+            if (i == 3) {
+                sb.append(" +").append(selectedPorts.size() - 3);
+                break;
+            }
+            if (i > 0) sb.append(", ");
+            sb.append(p);
+            i++;
+        }
+        txtPortsSummary.setText(sb.toString());
+    }
+
+    /** 同上，地区的摘要。不选时明确写「不限」而不是留空。 */
+    private void updateRegionsSummary() {
+        if (txtRegionsSummary == null) return;
+        java.util.List<String> names = new java.util.ArrayList<>();
+        for (String[] r : COMMON_REGIONS) {
+            if (selectedRegions.contains(r[0])) names.add(r[1]);
+        }
+        String extra = editCountries == null ? "" : editCountries.getText().toString().trim();
+        if (!extra.isEmpty()) names.add(extra.toUpperCase(Locale.ROOT));
+        if (names.isEmpty()) {
+            txtRegionsSummary.setText("不限");
+            return;
+        }
+        if (names.size() > 3) {
+            txtRegionsSummary.setText(String.join("、", names.subList(0, 3))
+                    + " +" + (names.size() - 3));
+        } else {
+            txtRegionsSummary.setText(String.join("、", names));
+        }
     }
 
     /**
@@ -251,10 +418,12 @@ public class MainActivity extends AppCompatActivity {
                     selectedPorts.remove(p);
                 }
                 updatePortHint();
+                updatePortsSummary();
                 return true;
             }));
         }
         updatePortHint();
+        updatePortsSummary();
     }
 
     /** 端口选得越多，候选数成倍增长，得让用户知道会变慢。 */
@@ -280,6 +449,7 @@ public class MainActivity extends AppCompatActivity {
                 } else {
                     selectedRegions.remove(code);
                 }
+                updateRegionsSummary();
                 return true;
             }));
         }
@@ -303,6 +473,7 @@ public class MainActivity extends AppCompatActivity {
         chip.setOnClickListener(v -> {
             boolean next = !v.isSelected();
             v.setSelected(next);
+            Anim.tapBounce(v);
             onToggle.onToggle(next);
         });
         return chip;
@@ -542,7 +713,9 @@ public class MainActivity extends AppCompatActivity {
     private void showCancelButton(String label) {
         btnCancel.setText(label);
         btnCancel.setEnabled(true);
-        btnCancel.setVisibility(View.VISIBLE);
+        if (btnCancel.getVisibility() != View.VISIBLE) {
+            Anim.fadeInUp(btnCancel, dp(6), 0);
+        }
     }
 
     private void resetButtons() {
@@ -561,7 +734,10 @@ public class MainActivity extends AppCompatActivity {
             selectTab(0);
         }
         txtProgressTitle.setText("执行状态");
-        layoutProgress.setVisibility(View.VISIBLE);
+        // 已经显示着就不再重播动画：轮询期间 showScanning 会被反复调到
+        if (layoutProgress.getVisibility() != View.VISIBLE) {
+            Anim.fadeInUp(layoutProgress, dp(10), 0);
+        }
         progressBar.setVisibility(View.VISIBLE);
         progressBar.setIndeterminate(true);
         layoutResult.setVisibility(View.GONE);
@@ -576,7 +752,9 @@ public class MainActivity extends AppCompatActivity {
     // 复用进度卡片而不是弹 Toast：这些信息用户需要停下来读，
     // Toast 两秒就没了。
     private void showNotice(String text) {
-        layoutProgress.setVisibility(View.VISIBLE);
+        if (layoutProgress.getVisibility() != View.VISIBLE) {
+            Anim.fadeInUp(layoutProgress, dp(10), 0);
+        }
         progressBar.setVisibility(View.GONE);
         txtProgressTitle.setText("说明");
         showProgressText(text);
@@ -584,7 +762,7 @@ public class MainActivity extends AppCompatActivity {
 
     private void showResult(String text) {
         layoutProgress.setVisibility(View.GONE);
-        layoutResult.setVisibility(View.VISIBLE);
+        Anim.fadeInUp(layoutResult, dp(10), 0);
         txtIpValue.setText("未找到可用 IP");
         txtIpValue.setEnabled(false);
         txtTargetBandwidth.setText("-");
@@ -671,9 +849,17 @@ public class MainActivity extends AppCompatActivity {
      * 端口选择和滚动位置，更不能打断正在跑的扫描。
      */
     private void selectTab(int tab) {
+        boolean changed = currentTab != tab || pageScan.getVisibility() == View.GONE;
         currentTab = tab;
-        pageScan.setVisibility(tab == 0 ? View.VISIBLE : View.GONE);
-        pageHistory.setVisibility(tab == 1 ? View.VISIBLE : View.GONE);
+        View show = tab == 0 ? pageScan : pageHistory;
+        View hide = tab == 0 ? pageHistory : pageScan;
+        hide.setVisibility(View.GONE);
+        // 只在真的切页时做动画。重复点同一个 tab 还闪一下会显得界面在抽。
+        if (changed) {
+            Anim.fadeInUp(show, dp(12), 0);
+        } else {
+            show.setVisibility(View.VISIBLE);
+        }
 
         highlightNav(navScan, R.id.navScanIcon, R.id.navScanLabel, tab == 0);
         highlightNav(navHistory, R.id.navHistoryIcon, R.id.navHistoryLabel, tab == 1);
@@ -746,7 +932,7 @@ public class MainActivity extends AppCompatActivity {
                                       int maxSpeed, int latencyMs, String dataCenter,
                                       String country, int elapsed) {
         layoutProgress.setVisibility(View.GONE);
-        layoutResult.setVisibility(View.VISIBLE);
+        boolean firstShow = layoutResult.getVisibility() != View.VISIBLE;
         txtIpValue.setEnabled(true);
         txtIpValue.setText(address);
         txtTargetBandwidth.setText(bandwidth + " Mbps");
@@ -758,6 +944,20 @@ public class MainActivity extends AppCompatActivity {
         txtDataCenter.setText(country.isEmpty() ? dc : dc + " " + country);
         txtElapsed.setText(elapsed + " 秒");
         txtResult.setVisibility(View.GONE);
+
+        if (firstShow) {
+            // 整卡淡入，六个指标块依次错开 40ms 冒出来。扫一次要等几十秒，
+            // 结果出现的这一下值得给一点仪式感。
+            Anim.fadeInUp(layoutResult, dp(12), 0);
+            Anim.staggerIn(new View[]{txtTargetBandwidth, txtRealBandwidth, txtMaxSpeed,
+                    txtLatency, txtDataCenter, txtElapsed}, 40);
+        } else {
+            // 已经显示着（连续扫两次）就只脉冲一下变化的数字，
+            // 整卡重播淡入会让人以为界面刷新丢了状态。
+            layoutResult.setVisibility(View.VISIBLE);
+            Anim.pulse(txtRealBandwidth);
+            Anim.pulse(txtLatency);
+        }
     }
 
     private void copyCurrentIp() {
@@ -828,12 +1028,20 @@ public class MainActivity extends AppCompatActivity {
         JSONArray history = loadHistory();
         txtEmptyHistory.setVisibility(history.length() == 0 ? View.VISIBLE : View.GONE);
 
+        java.util.List<View> rows = new java.util.ArrayList<>();
         for (int i = 0; i < history.length(); i++) {
             JSONObject item = history.optJSONObject(i);
             if (item == null) {
                 continue;
             }
-            layoutHistoryList.addView(createHistoryItem(item, i));
+            View row = createHistoryItem(item, i);
+            layoutHistoryList.addView(row);
+            rows.add(row);
+        }
+        // 列表项依次冒出。这里 stepMs 给 30 而不是结果卡的 40：
+        // 历史最多 10 条，40ms 会让最后一条等到 400ms 才出现。
+        if (!rows.isEmpty()) {
+            Anim.staggerIn(rows.toArray(new View[0]), 30);
         }
     }
 

@@ -162,34 +162,50 @@ def render(t):
         text((mx + 12, my + 23), v, font(14), col)
 
     y += ch + 14
-    # ---- 参数卡 ----
-    ph = 252
+    # ---- 参数卡（端口/地区已折叠，SNI 不折叠留在卡内）----
+    ph = 320
     vgrad(img, (14, y, W - 14, y + ph), 20, t["glass_top"], t["glass_bottom"], t["stroke"])
     d = dr()
     text((32, y + 16), "扫描参数", font(15), t["text"])
-    text((32, y + 46), "IP 协议", font(12), t["text2"])
-    rr(d, (32, y + 64, 192, y + 100), 18, fill=t["inp"], outline=t["hair"])
-    rr(d, (35, y + 67, 111, y + 97), 15, fill=t["primary"])
-    text((73, y + 75), "IPv4", font(13), "#FFFFFF", anchor="ma")
-    text((151, y + 75), "IPv6", font(13), t["text2"], anchor="ma")
-    text((212, y + 46), "期望带宽", font(12), t["text2"])
-    rr(d, (212, y + 64, 330, y + 100), 14, fill=t["inp"], outline=t["hair"])
-    text((224, y + 75), "1", font(14), t["text"])
-    text((338, y + 75), "Mbps", font(12), t["muted"])
-    text((32, y + 114), "端口", font(12), t["text2"])
-    px = 32
-    for lbl, sel in [("443", True), ("2053", False), ("2083", False),
-                     ("2087", False), ("8443", False)]:
-        wpx = 46 if len(lbl) == 3 else 54
-        rr(d, (px, y + 132, px + wpx, y + 164), 16,
-           fill=t["primary"] if sel else t["inp"],
-           outline=None if sel else t["hair"])
-        text((px + wpx / 2, y + 141), lbl, font(12),
-             "#FFFFFF" if sel else t["text2"], anchor="ma")
-        px += wpx + 8
-    text((32, y + 182), "你的节点域名（SNI / Host）", font(12), t["text2"])
-    rr(d, (32, y + 200, W - 32, y + 236), 14, fill=t["inp"], outline=t["hair"])
-    text((44, y + 211), "cdn.example.com", font(13), t["muted"])
+    d.line([32 * SS, (y + 44) * SS, (W - 32) * SS, (y + 44) * SS], fill=t["hair"], width=SS)
+
+    # IP 协议：药丸分段
+    text((32, y + 56), "IP 协议", font(12), t["text2"])
+    rr(d, (32, y + 74, 186, y + 110), 18, fill=t["inp"], outline=t["hair"])
+    rr(d, (35, y + 77, 108, y + 107), 15, fill=t["primary"])
+    text((71, y + 85), "IPv4", font(13), "#FFFFFF", anchor="ma")
+    text((147, y + 85), "IPv6", font(13), t["text2"], anchor="ma")
+
+    # 期望带宽：标签+说明在左，输入框固定 104dp 靠右
+    # （原来输入框独占整行 match_parent，只收 1~4 位数字，大半宽度是空的）
+    text((200, y + 62), "期望带宽", font(12), t["text2"])
+    text((200, y + 80), "不确定就先填 1", font(10), t["muted"])
+    rr(d, (W - 136, y + 66, W - 32, y + 110), 14, fill=t["inp"], outline=t["hair"])
+    text((W - 124, y + 79), "1", font(15), t["text"])
+    text((W - 74, y + 82), "Mbps", font(10), t["muted"])
+
+    d.line([32 * SS, (y + 124) * SS, (W - 32) * SS, (y + 124) * SS], fill=t["hair"], width=SS)
+
+    # 折叠行：标题在左，当前值摘要 + 箭头在右。
+    # 摘要保证折叠不藏信息 —— 不展开也知道现在测的是哪些端口 / 哪些地区。
+    for i, (title, summary) in enumerate([("端口", "443"), ("落地地区", "不限")]):
+        ry = y + 124 + i * 48
+        text((32, ry + 15), title, font(14), t["text"])
+        text((W - 58, ry + 16), summary, font(13), t["text2"], anchor="ra")
+        ax, ay = W - 44, ry + 24           # 箭头，收起时朝下
+        d.line([(ax - 5) * SS, (ay - 3) * SS, ax * SS, (ay + 3) * SS],
+               fill=t["text2"], width=int(1.6 * SS))
+        d.line([ax * SS, (ay + 3) * SS, (ax + 5) * SS, (ay - 3) * SS],
+               fill=t["text2"], width=int(1.6 * SS))
+        d.line([32 * SS, (ry + 48) * SS, (W - 32) * SS, (ry + 48) * SS],
+               fill=t["hair"], width=SS)
+
+    # SNI 不折叠：v1.7 起「能不能回源到你的服务器」这项校验完全依赖它
+    text((32, y + 232), "你的节点域名（SNI / Host）", font(12.5), t["text"])
+    text((32, y + 252), "强烈建议填写，填了才会验证 CF 能否回源到你的服务器",
+         font(10), t["muted"])
+    rr(d, (32, y + 272, W - 32, y + 308), 14, fill=t["inp"], outline=t["hair"])
+    text((44, y + 283), "your.domain.com", font(13), t["muted"])
 
     # ---- 底栏 ----
     d = dr()
@@ -214,6 +230,6 @@ d.text((pad * 2 + W * 1.5, pad), "深色模式", font=f, fill="#E8ECF4", anchor=
 canvas.paste(light, (pad, pad + label))
 canvas.paste(dark, (pad * 2 + W, pad + label))
 
-out = os.path.join(os.path.dirname(os.path.abspath(__file__)), "preview-v1.11-glass.png")
+out = os.path.join(os.path.dirname(os.path.abspath(__file__)), "preview-v1.12-glass.png")
 canvas.save(out)
 print(out)

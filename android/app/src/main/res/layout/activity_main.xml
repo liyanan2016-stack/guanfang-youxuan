@@ -90,6 +90,7 @@
             android:fillViewport="true">
 
             <LinearLayout
+                android:id="@+id/scanContent"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:orientation="vertical"
@@ -427,8 +428,8 @@
                         android:layout_width="match_parent"
                         android:layout_height="1dp"
                         android:layout_marginTop="12dp"
-                        android:layout_marginBottom="14dp"
-                        android:background="@color/divider" />
+                        android:layout_marginBottom="4dp"
+                        android:background="@color/glass_hairline" />
 
             <TextView
                 android:layout_width="wrap_content"
@@ -476,166 +477,273 @@
                     android:textStyle="bold" />
             </RadioGroup>
 
-            <!-- 期望带宽独占一行：原来它和 TLS 开关并排各占半宽，而 TLS 开关
-                 实际管的是端口列表，放在这里与它的作用无关。 -->
-            <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="14dp"
-                android:text="期望带宽"
-                android:textColor="@color/text_secondary"
-                android:textSize="13sp" />
-
-            <TextView
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="3dp"
-                android:text="达到这个速度就收工。填超过本地宽带上限会一直扫到轮次用尽，不确定就先填 1"
-                android:textColor="@color/text_secondary"
-                android:textSize="11sp" />
-
-            <LinearLayout
-                android:layout_width="match_parent"
-                android:layout_height="48dp"
-                android:layout_marginTop="8dp"
-                android:background="@drawable/glass_input"
-                android:gravity="center_vertical"
-                android:orientation="horizontal"
-                android:paddingStart="14dp"
-                android:paddingEnd="14dp">
-
-                <EditText
-                    android:id="@+id/editBandwidth"
-                    android:layout_width="0dp"
-                    android:layout_height="match_parent"
-                    android:layout_weight="1"
-                    android:background="@android:color/transparent"
-                    android:gravity="center_vertical"
-                    android:imeOptions="actionDone"
-                    android:importantForAutofill="no"
-                    android:inputType="number"
-                    android:maxLength="4"
-                    android:padding="0dp"
-                    android:singleLine="true"
-                    android:text="1"
-                    android:textColor="@color/text_primary"
-                    android:textSize="18sp"
-                    android:textStyle="bold" />
-
-                <TextView
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="Mbps"
-                    android:textColor="@color/text_secondary"
-                    android:textSize="13sp" />
-            </LinearLayout>
-
-            <!-- 端口：原版只测 80/443，于是优选出的 IP 拿去接一个跑在
-                 2053 的节点会报 closed pipe。必须让用户选实际要用的端口。
-
-                 TLS 开关放在这一行，因为它真正决定的就是「测 TLS 端口
-                 还是明文端口」——切换会重建下面的端口列表。原来它挂着
-                 「连接验证」的标签待在另一块区域里，用户切了开关只看到
-                 端口列表突然全变，不知道为什么。 -->
+            <!-- 期望带宽：标签和说明占左侧，输入框固定 104dp 靠右。
+                 原来输入框独占整行 match_parent，而它只收 1~4 位数字，
+                 大半宽度是空的。 -->
             <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="16dp"
+                android:baselineAligned="false"
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
+
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_marginEnd="12dp"
+                    android:layout_weight="1"
+                    android:orientation="vertical">
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="期望带宽"
+                        android:textColor="@color/text_secondary"
+                        android:textSize="13sp" />
+
+                    <TextView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="3dp"
+                        android:text="达到这个速度就收工。不确定就先填 1"
+                        android:textColor="@color/text_muted"
+                        android:textSize="11sp" />
+                </LinearLayout>
+
+                <LinearLayout
+                    android:layout_width="104dp"
+                    android:layout_height="44dp"
+                    android:background="@drawable/glass_input"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal"
+                    android:paddingStart="12dp"
+                    android:paddingEnd="10dp">
+
+                    <EditText
+                        android:id="@+id/editBandwidth"
+                        android:layout_width="0dp"
+                        android:layout_height="match_parent"
+                        android:layout_weight="1"
+                        android:background="@android:color/transparent"
+                        android:gravity="center_vertical"
+                        android:imeOptions="actionDone"
+                        android:importantForAutofill="no"
+                        android:inputType="number"
+                        android:maxLength="4"
+                        android:padding="0dp"
+                        android:singleLine="true"
+                        android:text="1"
+                        android:textColor="@color/text_primary"
+                        android:textSize="16sp"
+                        android:textStyle="bold" />
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="Mbps"
+                        android:textColor="@color/text_muted"
+                        android:textSize="11sp" />
+                </LinearLayout>
+            </LinearLayout>
+
+            <View
+                android:layout_width="match_parent"
+                android:layout_height="1dp"
+                android:layout_marginTop="14dp"
+                android:background="@color/glass_hairline" />
+
+            <!-- 端口和地区改折叠。这两块加起来能占掉大半屏（端口 5 个 chip
+                 换两行，地区 8 个 chip 换三行加一个输入框），而绝大多数人
+                 就用默认的 443 + 不限地区，从不动它们。
+
+                 收起时标题行右侧写当前值摘要，所以折叠没有藏掉信息 ——
+                 用户不展开也知道现在选的是什么。 -->
+            <LinearLayout
+                android:id="@+id/headerPorts"
+                android:layout_width="match_parent"
+                android:layout_height="48dp"
+                android:background="?android:attr/selectableItemBackground"
+                android:clickable="true"
+                android:focusable="true"
                 android:gravity="center_vertical"
                 android:orientation="horizontal">
 
                 <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="端口"
+                    android:textColor="@color/text_primary"
+                    android:textSize="14sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:id="@+id/txtPortsSummary"
                     android:layout_width="0dp"
                     android:layout_height="wrap_content"
+                    android:layout_marginStart="10dp"
                     android:layout_weight="1"
-                    android:text="端口"
+                    android:ellipsize="end"
+                    android:gravity="end"
+                    android:maxLines="1"
+                    android:text=""
                     android:textColor="@color/text_secondary"
                     android:textSize="13sp" />
 
-                <TextView
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:layout_marginEnd="6dp"
-                    android:text="TLS"
-                    android:textColor="@color/text_primary"
-                    android:textSize="13sp"
-                    android:textStyle="bold" />
-
-                <Switch
-                    android:id="@+id/checkTLS"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:showText="false"
-                    android:splitTrack="false"
-                    android:thumbTint="@color/switch_thumb"
-                    android:trackTint="@color/switch_track" />
+                <ImageView
+                    android:id="@+id/arrowPorts"
+                    android:layout_width="20dp"
+                    android:layout_height="20dp"
+                    android:layout_marginStart="4dp"
+                    android:contentDescription="展开端口设置"
+                    android:src="@drawable/ic_chevron_down" />
             </LinearLayout>
 
-            <TextView
-                android:id="@+id/txtPortHint"
+            <LinearLayout
+                android:id="@+id/boxPorts"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="3dp"
-                android:text="选你节点实际使用的端口，多选会变慢"
-                android:textColor="@color/text_secondary"
-                android:textSize="11sp" />
+                android:orientation="vertical"
+                android:visibility="gone">
 
-            <!-- 平铺换行而不是横向滚动：滚动会把 2053、8443 藏在屏幕外，
-                 而端口选错正是 closed pipe 的一个来源。 -->
-            <com.cf.ip.FlowLayout
-                android:id="@+id/layoutPorts"
+                <!-- TLS 开关放在端口区内部：它真正决定的就是「测 TLS 端口还是
+                     明文端口」，切换会重建下面的端口列表。 -->
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal">
+
+                    <TextView
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:text="TLS（关闭则测明文端口）"
+                        android:textColor="@color/text_secondary"
+                        android:textSize="13sp" />
+
+                    <Switch
+                        android:id="@+id/checkTLS"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:showText="false"
+                        android:splitTrack="false"
+                        android:thumbTint="@color/switch_thumb"
+                        android:trackTint="@color/switch_track" />
+                </LinearLayout>
+
+                <TextView
+                    android:id="@+id/txtPortHint"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="2dp"
+                    android:text="选你节点实际使用的端口，多选会变慢"
+                    android:textColor="@color/text_muted"
+                    android:textSize="11sp" />
+
+                <!-- 平铺换行而不是横向滚动：滚动会把 2053、8443 藏在屏幕外，
+                     而端口选错正是 closed pipe 的一个来源。 -->
+                <com.cf.ip.FlowLayout
+                    android:id="@+id/layoutPorts"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:layout_marginBottom="6dp" />
+            </LinearLayout>
+
+            <View
                 android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="8dp" />
+                android:layout_height="1dp"
+                android:background="@color/glass_hairline" />
 
             <!-- 地区：官方 IP 的落地机房取决于运营商线路，同一个 IP 在
                  电信/联通下可能落到不同国家，事先无从得知。v1.6 起会先做
                  一轮廉价侦察建立子网到国家的索引，再只在命中的段里优选。 -->
-            <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="16dp"
-                android:text="落地地区"
-                android:textColor="@color/text_secondary"
-                android:textSize="13sp" />
-
-            <TextView
+            <LinearLayout
+                android:id="@+id/headerRegions"
                 android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="3dp"
-                android:text="不选=不限。官方 IP 落地随运营商线路变化，筛得越窄越慢"
-                android:textColor="@color/text_secondary"
-                android:textSize="11sp" />
+                android:layout_height="48dp"
+                android:background="?android:attr/selectableItemBackground"
+                android:clickable="true"
+                android:focusable="true"
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
 
-            <com.cf.ip.FlowLayout
-                android:id="@+id/layoutRegions"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="8dp" />
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="落地地区"
+                    android:textColor="@color/text_primary"
+                    android:textSize="14sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:id="@+id/txtRegionsSummary"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="10dp"
+                    android:layout_weight="1"
+                    android:ellipsize="end"
+                    android:gravity="end"
+                    android:maxLines="1"
+                    android:text=""
+                    android:textColor="@color/text_secondary"
+                    android:textSize="13sp" />
+
+                <ImageView
+                    android:id="@+id/arrowRegions"
+                    android:layout_width="20dp"
+                    android:layout_height="20dp"
+                    android:layout_marginStart="4dp"
+                    android:contentDescription="展开地区设置"
+                    android:src="@drawable/ic_chevron_down" />
+            </LinearLayout>
 
             <LinearLayout
+                android:id="@+id/boxRegions"
                 android:layout_width="match_parent"
-                android:layout_height="44dp"
-                android:layout_marginTop="8dp"
-                android:background="@drawable/glass_input"
-                android:gravity="center_vertical"
-                android:orientation="horizontal"
-                android:paddingHorizontal="10dp">
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:visibility="gone">
 
-                <EditText
-                    android:id="@+id/editCountries"
+                <TextView
                     android:layout_width="match_parent"
-                    android:layout_height="match_parent"
-                    android:background="@android:color/transparent"
-                    android:hint="其他地区代码，逗号分隔，如 DE,NL"
-                    android:imeOptions="actionDone"
-                    android:importantForAutofill="no"
-                    android:inputType="textCapCharacters"
-                    android:padding="0dp"
-                    android:singleLine="true"
-                    android:textColor="@color/text_primary"
-                    android:textColorHint="@color/text_secondary"
-                    android:textSize="14sp" />
+                    android:layout_height="wrap_content"
+                    android:text="不选=不限。官方 IP 落地随运营商线路变化，筛得越窄越慢"
+                    android:textColor="@color/text_muted"
+                    android:textSize="11sp" />
+
+                <com.cf.ip.FlowLayout
+                    android:id="@+id/layoutRegions"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp" />
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="44dp"
+                    android:layout_marginTop="8dp"
+                    android:layout_marginBottom="6dp"
+                    android:background="@drawable/glass_input"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal"
+                    android:paddingHorizontal="12dp">
+
+                    <EditText
+                        android:id="@+id/editCountries"
+                        android:layout_width="match_parent"
+                        android:layout_height="match_parent"
+                        android:background="@android:color/transparent"
+                        android:hint="其他地区代码，逗号分隔，如 DE,NL"
+                        android:imeOptions="actionDone"
+                        android:importantForAutofill="no"
+                        android:inputType="textCapCharacters"
+                        android:padding="0dp"
+                        android:singleLine="true"
+                        android:textColor="@color/text_primary"
+                        android:textColorHint="@color/text_muted"
+                        android:textSize="14sp" />
+                </LinearLayout>
             </LinearLayout>
 
             <!-- 节点域名不再折叠：v1.7 起「能不能回源到你的服务器」这项
@@ -644,8 +752,8 @@
             <View
                 android:layout_width="match_parent"
                 android:layout_height="1dp"
-                android:layout_marginTop="16dp"
-                android:background="@color/divider" />
+                android:layout_marginTop="8dp"
+                android:background="@color/glass_hairline" />
 
             <TextView
                 android:layout_width="match_parent"

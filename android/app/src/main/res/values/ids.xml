@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- setTag(int, Object) 要求 key 是一个 aapt 生成的资源 id，
+         不能随便传整数（会抛 IllegalArgumentException）。 -->
+    <item name="tag_anim_running" type="id" />
+</resources>
