@@ -404,6 +404,35 @@
                     android:text=""
                     android:textColor="@color/text_secondary"
                     android:textSize="12sp" />
+
+                <!-- 备选结果。上面那一大块指标只展示最快的那个；选了输出
+                     5/10 个时，剩下的排在这里，每行一个可点复制的地址。
+
+                     只给地址 + 速度 + 延迟三项：备选是"第一个不好用就换下一个"
+                     的东西，机房和用时对这个决策没有帮助，全列出来反而要划很久。 -->
+                <LinearLayout
+                    android:id="@+id/layoutMoreResults"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="12dp"
+                    android:orientation="vertical"
+                    android:visibility="gone">
+
+                    <TextView
+                        android:id="@+id/txtMoreResultsTitle"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:text="备选地址"
+                        android:textColor="@color/text_secondary"
+                        android:textSize="12sp" />
+
+                    <LinearLayout
+                        android:id="@+id/layoutMoreList"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="6dp"
+                        android:orientation="vertical" />
+                </LinearLayout>
             </LinearLayout>
 
                 <!-- 参数区排在按钮和结果下面：跑第二轮时通常只想再点一次
@@ -545,6 +574,54 @@
                         android:textColor="@color/text_muted"
                         android:textSize="11sp" />
                 </LinearLayout>
+            </LinearLayout>
+
+            <!-- 输出数量。做成 1/5/10 三档而不是自由输入：这个值直接决定
+                 扫描时长（每个结果都要占一次完整测速预算），开放输入等于
+                 让用户自己踩「填 50 然后扫十分钟」的坑。
+
+                 档位从核心层取（Better.resultCounts()），不在界面里硬编码 ——
+                 两处各写一份，改一处忘另一处就会出现「界面能选、核心层不认」。 -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="16dp"
+                android:baselineAligned="false"
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
+
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_marginEnd="12dp"
+                    android:layout_weight="1"
+                    android:orientation="vertical">
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="输出数量"
+                        android:textColor="@color/text_secondary"
+                        android:textSize="13sp" />
+
+                    <TextView
+                        android:id="@+id/txtCountHint"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="3dp"
+                        android:text="只要最快的一个，出结果最快"
+                        android:textColor="@color/text_muted"
+                        android:textSize="11sp" />
+                </LinearLayout>
+
+                <RadioGroup
+                    android:id="@+id/groupCount"
+                    android:layout_width="wrap_content"
+                    android:layout_height="44dp"
+                    android:background="@drawable/segmented_track_bg"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal"
+                    android:padding="4dp" />
             </LinearLayout>
 
             <View

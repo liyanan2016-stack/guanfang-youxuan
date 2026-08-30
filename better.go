@@ -36,12 +36,43 @@ type ScanResult struct {
 	// 界面应该同时显示结果和提示，而不是只给一个错误。
 	BelowTarget bool   `json:"belowTarget"`
 	Error       string `json:"error"`
+
+	// Results 全部结果，按实测速度降序。用户选「输出 5 个 / 10 个」时
+	// 这里就有多条；选 1 个时只有一条，内容和上面那些顶层字段相同。
+	//
+	// 顶层字段没有因此废弃：界面和历史记录原来就读顶层，保留它们意味着
+	// 「只要 1 个」这条老路径的行为一字不变。
+	Results []ScanItem `json:"results"`
+	// WantCount 实际生效的输出数量（已收敛到 1/5/10 之一）。
+	// 回传是因为界面填 6 会被收敛成 10，得让用户看到真实值。
+	WantCount int `json:"wantCount"`
+	// FoundCount 实际达标的结果个数。要 5 个只凑到 3 个时，
+	// 界面得能说清「找到 3 个」而不是假装有 5 个。
+	FoundCount int `json:"foundCount"`
 }
+
+// ScanItem 单条优选结果。字段与 ScanResult 的顶层同名字段一致。
+type ScanItem struct {
+	IP            string `json:"ip"`
+	Port          int    `json:"port"`
+	Address       string `json:"address"`
+	RealBandwidth int    `json:"realBandwidth"`
+	MaxSpeed      int    `json:"maxSpeed"`
+	LatencyMs     int    `json:"latencyMs"`
+	DataCenter    string `json:"dataCenter"`
+	Country       string `json:"country"`
+}
+
+// ResultCounts 返回允许的输出数量 CSV（如 "1,5,10"），供界面构建选项。
+//
+// 和端口列表同理：不在界面里硬编码，两处各写一份改一处忘另一处
+// 就会出现「界面能选、核心层不认」的档位。
+func ResultCounts() string { return joinInts(allowedResultCounts) }
 
 // Version 返回核心层版本号，供界面显示
 func Version() string { return libVersion }
 
-const libVersion = "1.12"
+const libVersion = "1.13"
 
 // HTTPPorts 返回明文模式可选端口的 CSV，供界面构建选项
 func HTTPPorts() string { return joinInts(cfHTTPPorts) }
@@ -136,6 +167,11 @@ func enterTask() {
 // ports: 要测的端口 CSV（如 "443,2053"），空则只测默认端口（TLS 443 / 明文 80）
 // countries: 允许的落地国家代码 CSV（如 "HK,JP"），空则不限
 // sni: 自定义 SNI/Host，空则用 cloudflare.com
+// wantCount: 要输出几个结果，收敛到 1/5/10 之一（见 ResultCounts）。
+//
+// 关于 wantCount —— 它直接决定扫描时长：每个结果都要占一次完整测速预算
+// （speedTestFullBudget），要 10 个就意味着单轮测速时间翻几倍。所以只开放
+// 三档而不是任意数字，避免用户填个 50 然后等十分钟以为程序卡死。
 //
 // 关于 countries —— 和反代优选有本质区别：反代节点列表自带国家标签，
 // 可以先筛后测；官方 IP 的落地机房取决于运营商线路，同一个 IP 在
@@ -144,8 +180,10 @@ func enterTask() {
 //
 // 阻塞调用，需在后台线程执行。
 // 界面派发到后台线程之前应先调 BeginTask()，否则这段窗口里的取消会丢。
-func GetIPs(v4 bool, useTLS bool, bandwidth int, ports string, countries string, sni string) string {
+func GetIPs(v4 bool, useTLS bool, bandwidth int, ports string, countries string, sni string,
+	wantCount int) string {
 	enterTask()
+	wantCount = normalizeResultCount(wantCount)
 	setProgress("正在初始化...")
 
 	ipType := 4
@@ -172,7 +210,8 @@ func GetIPs(v4 bool, useTLS bool, bandwidth int, ports string, countries string,
 
 	startTime := timeNow()
 
-	out := cloudflareTest(ipType, useTLS, defaultTaskNum, speedTarget, filter, strings.TrimSpace(sni))
+	out := cloudflareTest(ipType, useTLS, defaultTaskNum, speedTarget, filter, strings.TrimSpace(sni),
+		wantCount)
 
 	realBandwidth := out.MaxSpeed / 128
 	elapsed := int(timeSince(startTime).Seconds())
@@ -187,9 +226,28 @@ func GetIPs(v4 bool, useTLS bool, bandwidth int, ports string, countries string,
 		DataCenter:    out.DataCenter,
 		Country:       out.Country,
 		Elapsed:       elapsed,
+		WantCount:     wantCount,
 	}
 	if out.IP != "" && out.Port > 0 {
 		result.Address = net.JoinHostPort(out.IP, strconv.Itoa(out.Port))
+	}
+	for _, it := range out.Results {
+		item := ScanItem{
+			IP:            it.IP,
+			Port:          it.Port,
+			RealBandwidth: it.MaxSpeed / 128,
+			MaxSpeed:      it.MaxSpeed,
+			LatencyMs:     it.LatencyMs,
+			DataCenter:    it.DataCenter,
+			Country:       it.Country,
+		}
+		if it.IP != "" && it.Port > 0 {
+			item.Address = net.JoinHostPort(it.IP, strconv.Itoa(it.Port))
+		}
+		result.Results = append(result.Results, item)
+		if it.MaxSpeed >= speedTarget {
+			result.FoundCount++
+		}
 	}
 
 	switch {
@@ -197,6 +255,10 @@ func GetIPs(v4 bool, useTLS bool, bandwidth int, ports string, countries string,
 		// 用户主动取消：不能报"未找到"，否则界面会误导用户
 		result.Cancelled = true
 		result.IP = ""
+		result.Address = ""
+		// 列表也要清空：只清 IP 会让界面显示"未找到"却又列出一串结果
+		result.Results = nil
+		result.FoundCount = 0
 		result.Error = "扫描已取消"
 		setProgress("扫描已取消")
 
@@ -230,10 +292,29 @@ func GetIPs(v4 bool, useTLS bool, bandwidth int, ports string, countries string,
 			result.Error = fmt.Sprintf("已测试 %d 个子网（共 %d 轮）未达到 %d Mbps，返回最佳结果 %d Mbps",
 				out.Tested, out.RoundsRun, bandwidth, realBandwidth)
 		}
+		if wantCount > 1 {
+			result.Error += fmt.Sprintf("；共返回 %d 个结果", len(result.Results))
+		}
 		setProgress(fmt.Sprintf("扫描完成，用时 %d 秒", elapsed))
 
+	case wantCount > 1 && result.FoundCount < wantCount:
+		// 达标但数量没凑够。不能沉默 —— 用户选了 10 个却只拿到 4 个，
+		// 得知道是子网测完了还是轮次用尽了，而不是以为界面吞了结果。
+		if out.PoolExhausted {
+			result.Error = fmt.Sprintf("%d 个子网已全部测过，只找到 %d 个达标 IP（要求 %d 个）",
+				out.PoolSize, result.FoundCount, wantCount)
+		} else {
+			result.Error = fmt.Sprintf("已测试 %d 个子网（共 %d 轮），只找到 %d 个达标 IP（要求 %d 个）",
+				out.Tested, out.RoundsRun, result.FoundCount, wantCount)
+		}
+		setProgress(fmt.Sprintf("扫描完成，找到 %d 个，用时 %d 秒", result.FoundCount, elapsed))
+
 	default:
-		setProgress(fmt.Sprintf("扫描完成，用时 %d 秒", elapsed))
+		if wantCount > 1 {
+			setProgress(fmt.Sprintf("扫描完成，找到 %d 个，用时 %d 秒", result.FoundCount, elapsed))
+		} else {
+			setProgress(fmt.Sprintf("扫描完成，用时 %d 秒", elapsed))
+		}
 	}
 
 	b, _ := json.Marshal(result)

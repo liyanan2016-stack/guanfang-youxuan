@@ -43,6 +43,10 @@ public class MainActivity extends AppCompatActivity {
     private RadioGroup groupIPVersion;
     private RadioButton radioIPv4;
     private RadioButton radioIPv6;
+    private RadioGroup groupCount;
+    private TextView txtCountHint;
+    /** 当前选中的输出数量，档位由核心层 Better.resultCounts() 给出 */
+    private int resultCount = 1;
     private Switch checkTLS;
     private EditText editBandwidth;
     private EditText editCountries;
@@ -76,6 +80,9 @@ public class MainActivity extends AppCompatActivity {
     private TextView txtDataCenter;
     private TextView txtElapsed;
     private TextView txtEmptyHistory;
+    private View layoutMoreResults;
+    private TextView txtMoreResultsTitle;
+    private LinearLayout layoutMoreList;
 
     // 三个分页与底部导航。分页靠 visibility 切换而不是重建视图：
     // 切页不能丢掉已填的输入和滚动位置，更不能打断正在跑的扫描。
@@ -107,6 +114,7 @@ public class MainActivity extends AppCompatActivity {
     private static final String PREFS_REGIONS = "regions";
     private static final String PREFS_COUNTRIES_EXTRA = "countries_extra";
     private static final String PREFS_SNI = "sni";
+    private static final String PREFS_RESULT_COUNT = "result_count";
     // 折叠状态也要记：改过端口的人下次多半还想看到它
     private static final String PREFS_PORTS_OPEN = "ports_open";
     private static final String PREFS_REGIONS_OPEN = "regions_open";
@@ -140,6 +148,8 @@ public class MainActivity extends AppCompatActivity {
         groupIPVersion = findViewById(R.id.groupIPVersion);
         radioIPv4 = findViewById(R.id.radioIPv4);
         radioIPv6 = findViewById(R.id.radioIPv6);
+        groupCount = findViewById(R.id.groupCount);
+        txtCountHint = findViewById(R.id.txtCountHint);
         checkTLS = findViewById(R.id.checkTLS);
         editBandwidth = findViewById(R.id.editBandwidth);
         editCountries = findViewById(R.id.editCountries);
@@ -174,6 +184,9 @@ public class MainActivity extends AppCompatActivity {
         txtDataCenter = findViewById(R.id.txtDataCenter);
         txtElapsed = findViewById(R.id.txtElapsed);
         txtEmptyHistory = findViewById(R.id.txtEmptyHistory);
+        layoutMoreResults = findViewById(R.id.layoutMoreResults);
+        txtMoreResultsTitle = findViewById(R.id.txtMoreResultsTitle);
+        layoutMoreList = findViewById(R.id.layoutMoreList);
         pageScan = findViewById(R.id.pageScan);
         pageHistory = findViewById(R.id.pageHistory);
         navScan = findViewById(R.id.navScan);
@@ -244,6 +257,7 @@ public class MainActivity extends AppCompatActivity {
         renderRegionChips();
         rebuildPortChips();
 
+        buildCountOptions();
         setupCollapsibles();
 
         renderHistory();
@@ -271,6 +285,77 @@ public class MainActivity extends AppCompatActivity {
             }
             Anim.staggerIn(cards.toArray(new View[0]), 55);
         });
+    }
+
+    /**
+     * 按核心层给的档位构建输出数量选项。
+     *
+     * <p>档位来自 {@link Better#resultCounts()}（"1,5,10"）而不是界面里硬编码 ——
+     * 和端口列表同理，两处各写一份就会出现「界面能选、核心层不认」的档位。
+     *
+     * <p>复用 IP 协议那套分段控件的样式（{@code segmented_option_bg} +
+     * {@code segmented_text}），不另造一种选择器：同一个卡片里出现两种
+     * 单选控件只会让人怀疑它们行为不同。
+     */
+    private void buildCountOptions() {
+        groupCount.removeAllViews();
+        String csv = Better.resultCounts();
+        java.util.List<Integer> counts = new java.util.ArrayList<>();
+        for (String part : csv.split(",")) {
+            part = part.trim();
+            if (part.isEmpty()) continue;
+            try {
+                counts.add(Integer.parseInt(part));
+            } catch (NumberFormatException ignored) {
+            }
+        }
+        // 核心层没给出档位时兜一个最小可用集，界面不能变成空白
+        if (counts.isEmpty()) {
+            counts.add(1);
+        }
+        // 保存的值可能不在当前档位里（核心层调整过档位），回落到第一档
+        if (!counts.contains(resultCount)) {
+            resultCount = counts.get(0);
+        }
+
+        for (int i = 0; i < counts.size(); i++) {
+            final int n = counts.get(i);
+            RadioButton rb = new RadioButton(this);
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(dp(44),
+                    LinearLayout.LayoutParams.MATCH_PARENT);
+            if (i > 0) lp.setMarginStart(dp(4));
+            rb.setLayoutParams(lp);
+            rb.setBackgroundResource(R.drawable.segmented_option_bg);
+            rb.setButtonDrawable(null);
+            rb.setGravity(Gravity.CENTER);
+            rb.setText(String.valueOf(n));
+            rb.setTextSize(14f);
+            rb.setTypeface(null, Typeface.BOLD);
+            rb.setTextColor(getResources().getColorStateList(R.color.segmented_text, getTheme()));
+            rb.setChecked(n == resultCount);
+            rb.setOnClickListener(v -> {
+                resultCount = n;
+                updateCountHint();
+                saveScanSettings();
+            });
+            groupCount.addView(rb);
+        }
+        updateCountHint();
+    }
+
+    /**
+     * 输出数量的说明文字。
+     *
+     * <p>必须写明「会变慢」：每个结果都要占一次完整测速预算，选 10 个
+     * 单轮测速时间是选 1 个的好几倍。用户不知道代价就会觉得程序卡死了。
+     */
+    private void updateCountHint() {
+        if (txtCountHint == null) return;
+        if (resultCount <= 1) {
+            txtCountHint.setText("只要最快的一个，出结果最快");
+        } else {
+            txtCountHint.setText("输出最快的 " + resultCount + " 个，耗时明显增加");
+        }
     }
 
     /**
@@ -529,6 +614,7 @@ public class MainActivity extends AppCompatActivity {
         final String ports = collectPorts();
         final String countries = collectCountries();
         final String sni = editSNI.getText().toString().trim();
+        final int count = resultCount;
         editBandwidth.clearFocus();
         hideKeyboard(editBandwidth);
         saveScanSettings();
@@ -553,7 +639,7 @@ public class MainActivity extends AppCompatActivity {
 
         executor.execute(() -> {
             try {
-                String resultJson = Better.getIPs(v4, useTLS, bandwidth, ports, countries, sni);
+                String resultJson = Better.getIPs(v4, useTLS, bandwidth, ports, countries, sni, count);
                 mainHandler.post(() -> onScanResult(resultJson));
             } catch (Exception e) {
                 mainHandler.post(() -> showResult("扫描出错: " + e.getMessage()));
@@ -607,6 +693,8 @@ public class MainActivity extends AppCompatActivity {
             // 用户主动取消：不能显示成"未找到"，那是误导
             if (cancelled) {
                 showNotice(error.isEmpty() ? "扫描已取消" : error);
+                // 备选列表必须收掉：留着上一次的结果会让人以为这次也出了结果
+                layoutMoreResults.setVisibility(View.GONE);
                 return;
             }
 
@@ -646,6 +734,7 @@ public class MainActivity extends AppCompatActivity {
 
             showStructuredResult(address, bandwidth, realBandwidth, maxSpeed, latencyMs,
                     dataCenter, country, elapsed);
+            renderMoreResults(json.optJSONArray("results"));
 
             // 未达标时结果和说明同时给出：IP 仍然可用，
             // 但要让用户知道没到他要的带宽
@@ -762,6 +851,7 @@ public class MainActivity extends AppCompatActivity {
 
     private void showResult(String text) {
         layoutProgress.setVisibility(View.GONE);
+        layoutMoreResults.setVisibility(View.GONE);
         Anim.fadeInUp(layoutResult, dp(10), 0);
         txtIpValue.setText("未找到可用 IP");
         txtIpValue.setEnabled(false);
@@ -806,6 +896,9 @@ public class MainActivity extends AppCompatActivity {
                 .getBoolean(PREFS_USE_TLS, false);
         int bandwidth = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
                 .getInt(PREFS_BANDWIDTH, 1);
+        // 默认 1：多数人只要一个最快的，而多要几个会明显变慢
+        resultCount = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+                .getInt(PREFS_RESULT_COUNT, 1);
 
         radioIPv4.setChecked(useIPv4);
         radioIPv6.setChecked(!useIPv4);
@@ -899,6 +992,7 @@ public class MainActivity extends AppCompatActivity {
                 .putString(PREFS_REGIONS, String.join(",", selectedRegions))
                 .putString(PREFS_COUNTRIES_EXTRA, editCountries.getText().toString().trim())
                 .putString(PREFS_SNI, editSNI.getText().toString().trim())
+                .putInt(PREFS_RESULT_COUNT, resultCount)
                 .apply();
     }
 
@@ -960,6 +1054,106 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
+    /**
+     * 渲染备选地址列表。
+     *
+     * <p>结果卡上方那一大块指标只展示最快的那个；这里列出剩下的。
+     * 选「输出 1 个」时整块隐藏，界面和以前一字不差。
+     *
+     * <p>只显示地址 + 速度 + 延迟：备选是「第一个不好用就换下一个」的东西，
+     * 机房和用时对这个决策没帮助，全列出来只会让人多划几屏。
+     */
+    private void renderMoreResults(JSONArray results) {
+        layoutMoreList.removeAllViews();
+
+        // 第 0 条是最快的那个，已经在上面的指标区展示过了，这里从 1 开始
+        int extra = results == null ? 0 : results.length() - 1;
+        if (extra <= 0) {
+            layoutMoreResults.setVisibility(View.GONE);
+            return;
+        }
+
+        txtMoreResultsTitle.setText("备选地址（" + extra + " 个，点击复制）");
+
+        java.util.List<View> rows = new java.util.ArrayList<>();
+        for (int i = 1; i < results.length(); i++) {
+            JSONObject item = results.optJSONObject(i);
+            if (item == null) continue;
+            View row = createResultRow(item, i);
+            layoutMoreList.addView(row);
+            rows.add(row);
+        }
+        layoutMoreResults.setVisibility(View.VISIBLE);
+        if (!rows.isEmpty()) {
+            Anim.staggerIn(rows.toArray(new View[0]), 30);
+        }
+    }
+
+    /** 备选列表里的一行：序号 + 地址 + 速度/延迟，整行可点复制。 */
+    private View createResultRow(JSONObject item, int rank) {
+        String ip = item.optString("ip", "");
+        String address = item.optString("address", "");
+        if (address.isEmpty()) address = ip;
+        final String copyTarget = address;
+        int maxSpeed = item.optInt("maxSpeed", 0);
+        int latencyMs = item.optInt("latencyMs", 0);
+
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setBackgroundResource(R.drawable.glass_metric);
+        row.setPadding(dp(10), dp(8), dp(10), dp(8));
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        lp.setMargins(0, dp(6), 0, 0);
+        row.setLayoutParams(lp);
+        row.setClickable(true);
+        row.setFocusable(true);
+        row.setOnClickListener(v -> {
+            Anim.tapBounce(v);
+            copyToClipboard("CF-IP", copyTarget, "已复制: " + copyTarget);
+        });
+
+        TextView rankView = new TextView(this);
+        rankView.setText(String.valueOf(rank + 1));
+        rankView.setTextColor(getColorCompat(R.color.text_muted));
+        rankView.setTextSize(11);
+        rankView.setGravity(Gravity.CENTER);
+        // 不能用 fixedSizeParams：它会把高度也按 dp 换算，
+        // 传 WRAP_CONTENT(-2) 会算成 -3px
+        row.addView(rankView, new LinearLayout.LayoutParams(
+                dp(18), ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        TextView addrView = new TextView(this);
+        addrView.setText(address);
+        // 等宽字体：一列地址对不齐的话扫读很费劲
+        addrView.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
+        addrView.setTextColor(getColorCompat(R.color.primary));
+        addrView.setTextSize(13);
+        addrView.setSingleLine(true);
+        addrView.setEllipsize(android.text.TextUtils.TruncateAt.END);
+        row.addView(addrView, weightedWrapParams());
+
+        TextView metaView = new TextView(this);
+        // 速度按 MB/s 显示，和上面指标区的口径一致
+        metaView.setText(formatSpeed(maxSpeed) + " · " + latencyMs + "ms");
+        metaView.setTextColor(getColorCompat(R.color.success_text));
+        metaView.setTextSize(11);
+        metaView.setGravity(Gravity.END);
+        row.addView(metaView, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        return row;
+    }
+
+    /** kB/s 转成人看的单位。上千就用 MB/s，四位数字读起来太费劲。 */
+    private String formatSpeed(int kbps) {
+        if (kbps >= 1000) {
+            return String.format(Locale.ROOT, "%.1f MB/s", kbps / 1024f);
+        }
+        return kbps + " kB/s";
+    }
+
     private void copyCurrentIp() {
         if (currentIp == null || currentIp.isEmpty()) {
             showToast("暂无可复制的地址");
@@ -983,25 +1177,34 @@ public class MainActivity extends AppCompatActivity {
         activeToast.show();
     }
 
+    /**
+     * 写入历史。
+     *
+     * <p>选了输出 5/10 个时，全部结果都要进历史 —— 只记最快那一条的话，
+     * 用户杀掉进程就再也找回不了另外几个备选，而"多拿几个备用"正是他
+     * 选这个档位的目的。
+     *
+     * <p>MAX_HISTORY 是 10，所以选 10 个会正好占满整个历史。这是可以接受的：
+     * 本次结果比上一次的旧结果更有用。
+     */
     private void saveHistory(String scanTime, JSONObject source, String resultText) {
         try {
-            JSONObject item = new JSONObject();
-            item.put("time", scanTime);
-            item.put("ip", source.optString("ip", ""));
-            item.put("port", source.optInt("port", 0));
-            // 历史里存完整地址：只存 IP 的话回看时还得重新猜端口
-            item.put("address", source.optString("address", source.optString("ip", "")));
-            item.put("bandwidth", source.optInt("bandwidth", 0));
-            item.put("realBandwidth", source.optInt("realBandwidth", 0));
-            item.put("maxSpeed", source.optInt("maxSpeed", 0));
-            item.put("latencyMs", source.optInt("latencyMs", 0));
-            item.put("dataCenter", source.optString("dataCenter", ""));
-            item.put("country", source.optString("country", ""));
-            item.put("elapsed", source.optInt("elapsed", 0));
-            item.put("resultText", resultText);
-
             JSONArray next = new JSONArray();
-            next.put(item);
+            JSONArray results = source.optJSONArray("results");
+
+            if (results != null && results.length() > 0) {
+                for (int i = 0; i < results.length() && next.length() < MAX_HISTORY; i++) {
+                    JSONObject r = results.optJSONObject(i);
+                    if (r == null) continue;
+                    // resultText 是给最快那条用的详细文本，其余留空，
+                    // 免得每条历史都塞一份几乎相同的长文本
+                    next.put(historyItemOf(scanTime, source, r, i == 0 ? resultText : ""));
+                }
+            } else {
+                // 老核心层不返回 results，回落到顶层字段
+                next.put(historyItemOf(scanTime, source, source, resultText));
+            }
+
             JSONArray old = loadHistory();
             for (int i = 0; i < old.length() && next.length() < MAX_HISTORY; i++) {
                 next.put(old.getJSONObject(i));
@@ -1012,6 +1215,32 @@ public class MainActivity extends AppCompatActivity {
                     .apply();
         } catch (Exception ignored) {
         }
+    }
+
+    /**
+     * 拼一条历史记录。
+     *
+     * @param source 整个扫描结果，用来取 bandwidth / elapsed 这类整次共享的字段
+     * @param one    单条结果，用来取 ip / 速度 / 延迟这类逐条不同的字段
+     */
+    private JSONObject historyItemOf(String scanTime, JSONObject source, JSONObject one,
+                                     String resultText) throws Exception {
+        JSONObject item = new JSONObject();
+        item.put("time", scanTime);
+        item.put("ip", one.optString("ip", ""));
+        item.put("port", one.optInt("port", 0));
+        // 历史里存完整地址：只存 IP 的话回看时还得重新猜端口
+        item.put("address", one.optString("address", one.optString("ip", "")));
+        // 期望带宽和总用时是整次扫描共有的，不在单条结果里
+        item.put("bandwidth", source.optInt("bandwidth", 0));
+        item.put("elapsed", source.optInt("elapsed", 0));
+        item.put("realBandwidth", one.optInt("realBandwidth", 0));
+        item.put("maxSpeed", one.optInt("maxSpeed", 0));
+        item.put("latencyMs", one.optInt("latencyMs", 0));
+        item.put("dataCenter", one.optString("dataCenter", ""));
+        item.put("country", one.optString("country", ""));
+        item.put("resultText", resultText);
+        return item;
     }
 
     private JSONArray loadHistory() {
@@ -1095,7 +1324,7 @@ public class MainActivity extends AppCompatActivity {
 
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setBackgroundResource(R.drawable.metric_bg);
+        root.setBackgroundResource(R.drawable.glass_metric);
         root.setPadding(dp(12), dp(11), dp(12), dp(11));
         LinearLayout.LayoutParams rootParams = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,

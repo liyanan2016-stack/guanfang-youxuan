@@ -136,6 +136,18 @@
       <input type="number" id="bw" value="1" min="1" max="1000">
       <span class="unit">Mbps</span>
     </div>
+    <!-- 输出数量：只给 1/5/10 三档而不是自由输入。这个值直接决定扫描时长
+         （每个结果都要占一次完整测速预算），开放输入等于让用户自己踩
+         「填 50 然后扫十分钟」的坑。 -->
+    <div class="row">
+      <label class="lbl">输出数量</label>
+      <div class="seg" id="segCount">
+        <button data-c="1" class="on">1</button>
+        <button data-c="5">5</button>
+        <button data-c="10">10</button>
+      </div>
+      <span class="hint sub" id="countHint">只要最快的一个</span>
+    </div>
     <!-- 端口：原版只测 80/443，优选出的 IP 拿去接一个跑在 2053 的节点
          会报 closed pipe，因为验证的根本不是要用的那个端口 -->
     <div class="row col">
@@ -193,6 +205,13 @@
       <code id="rIP">-</code>
       <button class="copy" id="btnCopy">复制</button>
     </div>
+    <!-- 备选地址：上面的指标区只展示最快的那个，选了输出 5/10 个时
+         剩下的列在这里。只给地址/速度/延迟——备选是「第一个不好用就换
+         下一个」的东西，机房和用时对这个决策没帮助。 -->
+    <div id="moreBox" style="display:none;margin-top:14px">
+      <div class="hint sub" id="moreTitle">备选地址</div>
+      <div id="moreList"></div>
+    </div>
   </div>
 
   <div class="card">
@@ -234,6 +253,22 @@ function esc(s){
 }
 
 // ---------- 分段控件 ----------
+
+// 输出数量。默认 1：多数人只要一个最快的，多要几个会明显变慢。
+let wantCount = 1;
+
+document.querySelectorAll('#segCount button').forEach(b=>{
+  b.onclick=()=>{
+    if(b.disabled) return;
+    document.querySelectorAll('#segCount button').forEach(x=>x.classList.remove('on'));
+    b.classList.add('on');
+    wantCount = parseInt(b.dataset.c, 10) || 1;
+    // 必须写明会变慢：每个结果都要占一次完整测速预算，
+    // 用户不知道代价就会以为程序卡死了
+    document.getElementById('countHint').textContent =
+      wantCount <= 1 ? '只要最快的一个' : ('输出最快的 '+wantCount+' 个，耗时明显增加');
+  };
+});
 
 document.querySelectorAll('#segIP button').forEach(b=>{
   b.onclick=()=>{
@@ -349,7 +384,8 @@ function setBusy(on, label){
   document.getElementById('btnClearCache').disabled = on;
   document.getElementById('btnCancel').disabled = !on;
   document.getElementById('btnScan').textContent = on ? (label || '扫描中…') : '开始扫描';
-  document.querySelectorAll('#segIP button,#segTLS button').forEach(b=>b.disabled = on);
+  document.querySelectorAll('#segIP button,#segTLS button,#segCount button')
+    .forEach(b=>b.disabled = on);
   document.getElementById('bw').disabled = on;
   // 扫描中锁掉筛选项：改了也不会生效，留着可点会误导
   document.querySelectorAll('#chipPorts button,#chipRegions button').forEach(b=>b.disabled = on);
@@ -368,6 +404,7 @@ document.getElementById('btnScan').onclick = async ()=>{
     method:'POST', headers:{'Content-Type':'application/json'},
     body: JSON.stringify({
       v4: useV4, useTLS: useTLS, bandwidth: bw,
+      count: wantCount,
       ports: Array.from(selectedPorts).join(','),
       countries: collectCountries(),
       sni: document.getElementById('sni').value.trim()
@@ -439,6 +476,7 @@ function showResult(r){
   if(r.cancelled){
     prog.textContent = r.error || '扫描已取消';
     card.style.display = 'none';
+    document.getElementById('moreBox').style.display = 'none';
     return;
   }
 
@@ -446,6 +484,7 @@ function showResult(r){
   if(!r.ip){
     prog.innerHTML = '<span class="err">' + esc(r.error || '未找到可用 IP') + '</span>';
     card.style.display = 'none';
+    document.getElementById('moreBox').style.display = 'none';
     return;
   }
 
@@ -467,6 +506,34 @@ function showResult(r){
   document.getElementById('rDC').textContent    =
     (r.dataCenter || '-') + (r.country ? ' ('+r.country+')' : '');
   document.getElementById('rTime').textContent  = r.elapsed ? r.elapsed+' 秒' : '-';
+  renderMore(r.results);
+}
+
+// 备选地址列表。第 0 条是最快的那个，已在上面的指标区展示过，从 1 开始。
+function renderMore(results){
+  const box = document.getElementById('moreBox');
+  if(!Array.isArray(results) || results.length <= 1){
+    box.style.display = 'none';
+    return;
+  }
+  const rest = results.slice(1);
+  document.getElementById('moreTitle').textContent =
+    '备选地址（'+rest.length+' 个，点击复制）';
+  let h = '<table><thead><tr><th>#</th><th>地址</th><th>峰值</th><th>延迟</th>'
+        + '<th>数据中心</th></tr></thead><tbody>';
+  rest.forEach((it, i)=>{
+    const addr = it.address || it.ip || '';
+    h += '<tr><td>'+(i+2)+'</td>'
+       + '<td class="ip" data-ip="'+esc(addr)+'">'+esc(addr)+'</td>'
+       + '<td>'+(it.maxSpeed||0)+' kB/s</td>'
+       + '<td>'+(it.latencyMs||0)+' ms</td>'
+       + '<td>'+esc(it.dataCenter||'-')+(it.country?' ('+esc(it.country)+')':'')+'</td></tr>';
+  });
+  document.getElementById('moreList').innerHTML = h + '</tbody></table>';
+  document.getElementById('moreList').querySelectorAll('td.ip').forEach(td=>{
+    td.onclick = ()=> copyText(td.dataset.ip);
+  });
+  box.style.display = 'block';
 }
 
 async function loadHist(){

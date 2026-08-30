@@ -975,7 +975,10 @@ func originReachable(code int) bool {
 // 地区不匹配时还会把整个来源子网标记为跳过：同一个 /24 内的 IP 基本
 // 落在同一机房，逐个测完再逐个丢弃是纯浪费。地区筛得窄时这个优化
 // 直接决定能不能在可接受时间内出结果。
-func runRTTTest(cands []candidateIP, ports []int, taskNum int, useTLS bool, sni string, filter scanFilter) []RTTResult {
+//
+// wantCount 是用户要的结果个数，只用来决定保留多少候选进测速阶段：
+// 要 10 个结果却只留 10 个候选的话，一部分候选测速归零就凑不满了。
+func runRTTTest(cands []candidateIP, ports []int, taskNum int, useTLS bool, sni string, filter scanFilter, wantCount int) []RTTResult {
 	// 候选是 IP 与端口的组合
 	type target struct {
 		ip     string
@@ -1105,7 +1108,14 @@ collect:
 		skipNote = fmt.Sprintf("，跳过 %d 个同段地区不符的目标", skipped)
 	}
 
-	kept, dropped := capPerColo(results, maxSpeedTestCount)
+	// 要几个结果就得留够候选。RTT 候选不足时后面的完整测速没东西可测，
+	// 用户要 10 个只能拿到 3 个。留 2 倍余量是因为一部分候选测速会归零
+	// （403、连接被 reset、慢启动上不来）。
+	keepCount := maxSpeedTestCount
+	if wantCount > 1 {
+		keepCount = max(maxSpeedTestCount, wantCount*2)
+	}
+	kept, dropped := capPerColo(results, keepCount)
 	diversityNote := ""
 	if dropped > 0 {
 		diversityNote = fmt.Sprintf("，同机房超额剔除 %d 个", dropped)
@@ -1378,10 +1388,10 @@ func lookupDataCenter(colo string) string {
 
 // ----------------------- 核心测试逻辑 -----------------------
 
-// speedTestRound 对一批 RTT 候选做测速，返回本轮实测最快的那个。
+// speedTestRound 对一批 RTT 候选做测速，把结果收进 pool。
 //
 // 两阶段：候选多时先用 speedTestProbeBudget 粗测全部，再只对前
-// speedTestFinalists 个做完整测速。
+// finalistCount(wantCount) 个做完整测速。
 //
 // 为什么要两阶段：「测完 top N 再选最优」把每轮成本推到 10 × 5 秒 = 50 秒，
 // 质量上去了但慢得没人愿意用。粗测 1.5 秒足够区分「几百 kB/s」和「几 MB/s」
@@ -1390,16 +1400,22 @@ func lookupDataCenter(colo string) string {
 //
 // 粗测的绝对值不能用：TCP 窗口还没涨满，测出来系统性偏低。只用来排序。
 //
-// 第二个返回值为 true 表示用户取消了扫描。
-func speedTestRound(cands []RTTResult, useTLS bool, target int) (testOutcome, bool) {
+// wantCount > 1 时不能测到第一个达标就收工 —— 那样永远只能凑出一个结果。
+// 改成「池里达标的数量够了才收工」。
+//
+// 返回本轮实测最快的那个（供进度文案用）和是否被取消。
+func speedTestRound(cands []RTTResult, useTLS bool, target int, wantCount int,
+	pool *resultPool) (testOutcome, bool) {
 	if len(cands) == 0 {
 		return testOutcome{}, false
 	}
 
+	wantFinalists := finalistCount(wantCount)
 	finalists := cands
 
-	// 候选够多才值得预筛：本来就少的时候省不下多少，还多一次连接开销
-	if speedTestPickBest && len(cands) > speedTestProbeThreshold {
+	// 候选够多才值得预筛：本来就少的时候省不下多少，还多一次连接开销。
+	// 要多个结果时决赛名额也多，候选没比名额多出多少就别预筛了。
+	if speedTestPickBest && len(cands) > speedTestProbeThreshold && len(cands) > wantFinalists {
 		type probe struct {
 			r     RTTResult
 			speed int
@@ -1423,9 +1439,9 @@ func speedTestRound(cands []RTTResult, useTLS bool, target int) (testOutcome, bo
 			return probes[i].speed > probes[j].speed
 		})
 
-		finalists = make([]RTTResult, 0, speedTestFinalists)
+		finalists = make([]RTTResult, 0, wantFinalists)
 		for _, p := range probes {
-			if len(finalists) >= speedTestFinalists {
+			if len(finalists) >= wantFinalists {
 				break
 			}
 			// 粗测彻底跑不动的没必要再花 5 秒确认
@@ -1437,7 +1453,7 @@ func speedTestRound(cands []RTTResult, useTLS bool, target int) (testOutcome, bo
 		// 全部粗测都是 0（网络抖动或测速源故障）时不能放弃整轮，
 		// 退回按延迟顺序做完整测速
 		if len(finalists) == 0 {
-			finalists = cands[:min(speedTestFinalists, len(cands))]
+			finalists = cands[:min(wantFinalists, len(cands))]
 		}
 		setProgress(fmt.Sprintf("预筛完成，%d 个候选中挑出 %d 个做完整测速",
 			len(cands), len(finalists)))
@@ -1449,8 +1465,13 @@ func speedTestRound(cands []RTTResult, useTLS bool, target int) (testOutcome, bo
 			return testOutcome{}, true
 		}
 
-		setProgress(fmt.Sprintf("正在测速 %d/%d：%s:%d (延迟 %dms 抖动 %dms)",
-			i+1, len(finalists), r.IP, r.Port, r.LatencyMs, r.JitterMs))
+		if wantCount > 1 {
+			setProgress(fmt.Sprintf("正在测速 %d/%d：%s:%d (已找到 %d/%d 个达标)",
+				i+1, len(finalists), r.IP, r.Port, pool.qualified(target), wantCount))
+		} else {
+			setProgress(fmt.Sprintf("正在测速 %d/%d：%s:%d (延迟 %dms 抖动 %dms)",
+				i+1, len(finalists), r.IP, r.Port, r.LatencyMs, r.JitterMs))
+		}
 		// 用 RTT 阶段测通的那个端口测速，不能回落到 80/443 ——
 		// 否则测的是另一个端口的速度，结果对不上用户实际要用的端口。
 		// 传入 target 让明显达不到目标的 IP 能提前放弃，不必占满预算。
@@ -1467,6 +1488,11 @@ func speedTestRound(cands []RTTResult, useTLS bool, target int) (testOutcome, bo
 		cca2 := countryOfColo(dc)
 		setProgress(fmt.Sprintf("%s:%d 峰值速度 %d kB/s, 数据中心 %s", r.IP, r.Port, maxSpeed, dcName))
 
+		pool.add(speedResult{
+			IP: r.IP, Port: r.Port, MaxSpeed: maxSpeed, LatencyMs: tcpMs,
+			DataCenter: dcName, Country: cca2,
+		})
+
 		if maxSpeed > best.MaxSpeed {
 			best = testOutcome{
 				IP: r.IP, Port: r.Port, MaxSpeed: maxSpeed, LatencyMs: tcpMs,
@@ -1476,8 +1502,17 @@ func speedTestRound(cands []RTTResult, useTLS bool, target int) (testOutcome, bo
 
 		// 什么时候不必再往下测：
 		// - 关掉「测完选最优」时，达标即收工（旧行为）
-		// - 开着时，只有远超目标才提前收工：用户填 1 Mbps 却测出
+		// - 只要一个结果时，只有远超目标才提前收工：用户填 1 Mbps 却测出
 		//   50 Mbps，再测剩下的几乎不可能改变选择，纯粹白等
+		// - 要多个结果时，凑够达标数量才收工。这里不能再用 goodEnough
+		//   那条捷径 —— 第一个 IP 跑出 50 Mbps 说明它很好，但另外
+		//   4 个还没测，直接收工就只能给一个结果。
+		if wantCount > 1 {
+			if pool.qualified(target) >= wantCount {
+				break
+			}
+			continue
+		}
 		if maxSpeed >= target {
 			if !speedTestPickBest || maxSpeed >= target*speedTestGoodEnough {
 				break
@@ -1486,6 +1521,20 @@ func speedTestRound(cands []RTTResult, useTLS bool, target int) (testOutcome, bo
 	}
 
 	return best, false
+}
+
+// finalistCount 算出该有多少个候选进入完整测速。
+//
+// 要 N 个结果至少得完整测 N 个，但不能刚好等于 N：一部分候选测速会归零
+// （403、连接被 reset、慢启动上不来），刚好够就凑不满。多给 2 个余量。
+//
+// 上限是 maxSpeedTestCount：再多单轮就要 10 × 5 秒以上，用户会以为卡死。
+// 凑不满的缺口交给下一轮补。
+func finalistCount(wantCount int) int {
+	if wantCount <= 1 {
+		return speedTestFinalists
+	}
+	return min(max(speedTestFinalists, wantCount+2), maxSpeedTestCount)
 }
 
 // roundBatchSize 算出每轮该抽多少个子网。
@@ -1531,10 +1580,20 @@ type testOutcome struct {
 	PoolSize      int  // 子网总数
 	PoolExhausted bool // true = 全部子网已测完（而非轮次用尽）
 	BelowTarget   bool // true = 有结果但未达到期望带宽
+
+	// Results 按速度降序的全部结果（含 IP/Port/MaxSpeed 等字段）。
+	//
+	// 用户要 5 或 10 个结果时，第一个和 IP/Port/MaxSpeed 那几个顶层字段
+	// 是同一个 —— 顶层字段保留下来是为了不动界面已有的读取逻辑，
+	// 老版本界面读顶层照样能跑。
+	Results []speedResult
 }
 
 // cloudflareTest 核心测试逻辑
-func cloudflareTest(ipType int, useTLS bool, taskNum int, speed int, filter scanFilter, sni string) testOutcome {
+func cloudflareTest(ipType int, useTLS bool, taskNum int, speed int, filter scanFilter, sni string,
+	wantCount int) testOutcome {
+	wantCount = normalizeResultCount(wantCount)
+	pool := newResultPool(wantCount)
 	initLocations()
 	if isCancelled() {
 		return testOutcome{}
@@ -1575,9 +1634,8 @@ func cloudflareTest(ipType int, useTLS bool, taskNum int, speed int, filter scan
 		sampler = newRegionSampler(base, ipType, ports[0], useTLS, sni, filter, taskNum)
 	}
 
-	// 记录历轮中实测最快的 IP。轮次用尽仍未达标时把它返回，
-	// 至少让用户拿到一个可用结果，而不是空手而归。
-	var best testOutcome
+	// 历轮的结果都攒在 pool 里（见上面的 newResultPool）。轮次用尽仍未凑够时
+	// 把池里已有的返回，至少让用户拿到可用结果，而不是空手而归。
 
 	roundsRun := 0
 	poolExhausted := false
@@ -1631,7 +1689,7 @@ func cloudflareTest(ipType int, useTLS bool, taskNum int, speed int, filter scan
 				round, len(sampled), ipsPerSubnet, len(ports), len(testIPs)*len(ports),
 				sampler.used(), sampler.total()))
 
-			rttResults = runRTTTest(testIPs, ports, taskNum, useTLS, sni, filter)
+			rttResults = runRTTTest(testIPs, ports, taskNum, useTLS, sni, filter, wantCount)
 			if isCancelled() {
 				break
 			}
@@ -1658,35 +1716,47 @@ func cloudflareTest(ipType int, useTLS bool, taskNum int, speed int, filter scan
 		// 原版遇到第一个达标的就返回，但默认目标是 1 Mbps —— 几乎人人达标，
 		// 于是"优选"退化成"延迟最低"。延迟低不代表带宽高：同城机房延迟 20ms
 		// 却可能已被打满，300ms 的远端反而跑得开。
-		roundBest, cancelled := speedTestRound(rttResults, useTLS, speed)
+		roundBest, cancelled := speedTestRound(rttResults, useTLS, speed, wantCount, pool)
 		if cancelled {
 			setProgress("扫描已取消")
 			return testOutcome{}
 		}
 
-		// 本轮最快的达标 → 返回它（而不是本轮第一个达标的）
-		if roundBest.MaxSpeed >= speed && roundBest.IP != "" {
-			setProgress(fmt.Sprintf("找到优选 IP: %s:%d, 速度 %d kB/s, 延迟 %dms",
-				roundBest.IP, roundBest.Port, roundBest.MaxSpeed, roundBest.LatencyMs))
-			roundBest.RoundsRun = round
-			roundBest.Tested = sampler.used()
-			roundBest.PoolSize = sampler.total()
-			return roundBest
+		// 达标数量凑够了就收工。要 1 个时和以前完全一样；要 5/10 个时
+		// 会继续跑下一轮去补，而不是拿到第一个达标的就返回。
+		if pool.qualified(speed) >= wantCount {
+			top := pool.best()
+			if wantCount > 1 {
+				setProgress(fmt.Sprintf("已找到 %d 个达标 IP，最快 %s:%d (%d kB/s)",
+					pool.qualified(speed), top.IP, top.Port, top.MaxSpeed))
+			} else {
+				setProgress(fmt.Sprintf("找到优选 IP: %s:%d, 速度 %d kB/s, 延迟 %dms",
+					top.IP, top.Port, top.MaxSpeed, top.LatencyMs))
+			}
+			out := outcomeFromPool(pool)
+			out.RoundsRun = round
+			out.Tested = sampler.used()
+			out.PoolSize = sampler.total()
+			return out
 		}
-		if roundBest.MaxSpeed > best.MaxSpeed {
-			best = roundBest
-		}
-
 		// 子网刚好取完，没有下一批可测，不必再走剩下的轮次
 		if sampler.used() >= sampler.total() {
 			poolExhausted = true
 			break
 		}
 
-		setProgress(fmt.Sprintf("第 %d 轮未达到期望带宽（本轮最快 %d kB/s），继续下一轮...",
-			round, roundBest.MaxSpeed))
+		if wantCount > 1 {
+			setProgress(fmt.Sprintf("第 %d 轮结束（本轮最快 %d kB/s，累计达标 %d/%d 个），继续下一轮...",
+				round, roundBest.MaxSpeed, pool.qualified(speed), wantCount))
+		} else {
+			setProgress(fmt.Sprintf("第 %d 轮未达到期望带宽（本轮最快 %d kB/s），继续下一轮...",
+				round, roundBest.MaxSpeed))
+		}
 	}
 
+	// 轮次/子网用尽：把池里攒到的全部结果返回，而不是只给最快那一个。
+	// 用户要 5 个但只凑到 3 个时，3 个也比 1 个有用。
+	best := outcomeFromPool(pool)
 	best.RoundsRun = roundsRun
 	best.Tested = sampler.used()
 	best.PoolSize = sampler.total()
@@ -1703,4 +1773,143 @@ func cloudflareTest(ipType int, useTLS bool, taskNum int, speed int, filter scan
 		}
 	}
 	return best
+}
+
+// ----------------------- 多结果输出 -----------------------
+
+// allowedResultCounts 允许的输出数量。
+//
+// 只给三档而不是任意数字：这个值直接决定扫描时长（每个结果都要占一次
+// 完整测速预算），开放输入等于让用户自己踩「填 50 然后扫十分钟」的坑。
+// 1 = 只要最快的一个（默认，最快出结果）
+// 5 = 一把备选，够应付某个 IP 被墙的情况
+// 10 = 尽量多拿，代价是明显变慢
+var allowedResultCounts = []int{1, 5, 10}
+
+// normalizeResultCount 把任意输入收敛到 allowedResultCounts 里的某一档。
+//
+// 取「不小于输入的最小档位」而不是四舍五入：用户想要 6 个时给 10 个
+// （多给不亏），而不是给 5 个（少了不够用）。超过最大档位就取最大。
+func normalizeResultCount(n int) int {
+	if n <= 1 {
+		return allowedResultCounts[0]
+	}
+	for _, c := range allowedResultCounts {
+		if n <= c {
+			return c
+		}
+	}
+	return allowedResultCounts[len(allowedResultCounts)-1]
+}
+
+// speedResult 一个测速完成的候选。
+type speedResult struct {
+	IP         string
+	Port       int
+	MaxSpeed   int
+	LatencyMs  int
+	DataCenter string
+	Country    string
+}
+
+// resultPool 按速度降序保留最快的若干个结果。
+//
+// 按 IP 去重而不是按 IP:端口：同一个 IP 在 443 和 2053 上的速度基本一样，
+// 都留着等于用三个名额换一个选择。用户要 5 个结果是想要 5 个不同的落点，
+// 拿去做备用节点或者分散使用，同 IP 换端口起不到这个作用。
+type resultPool struct {
+	limit int
+	items []speedResult
+	byIP  map[string]int
+}
+
+func newResultPool(limit int) *resultPool {
+	if limit < 1 {
+		limit = 1
+	}
+	return &resultPool{limit: limit, byIP: make(map[string]int, limit)}
+}
+
+// add 收入一个结果。同 IP 已存在时只在更快的情况下替换。
+func (p *resultPool) add(r speedResult) {
+	if r.IP == "" || r.MaxSpeed <= 0 {
+		return
+	}
+	if idx, ok := p.byIP[r.IP]; ok {
+		if r.MaxSpeed <= p.items[idx].MaxSpeed {
+			return
+		}
+		p.items[idx] = r
+		p.sortAndTrim()
+		return
+	}
+	p.items = append(p.items, r)
+	p.sortAndTrim()
+}
+
+func (p *resultPool) sortAndTrim() {
+	sort.SliceStable(p.items, func(i, j int) bool {
+		if p.items[i].MaxSpeed != p.items[j].MaxSpeed {
+			return p.items[i].MaxSpeed > p.items[j].MaxSpeed
+		}
+		// 速度相同就让延迟低的靠前
+		return p.items[i].LatencyMs < p.items[j].LatencyMs
+	})
+	if len(p.items) > p.limit {
+		p.items = p.items[:p.limit]
+	}
+	// 索引必须整体重建：排序和截断都会让旧下标失效
+	p.byIP = make(map[string]int, len(p.items))
+	for i, it := range p.items {
+		p.byIP[it.IP] = i
+	}
+}
+
+// qualified 返回达到目标速度的结果个数。
+func (p *resultPool) qualified(target int) int {
+	n := 0
+	for _, it := range p.items {
+		if it.MaxSpeed >= target {
+			n++
+		}
+	}
+	return n
+}
+
+func (p *resultPool) len() int { return len(p.items) }
+
+// best 返回最快的那个；池为空时返回零值。
+func (p *resultPool) best() speedResult {
+	if len(p.items) == 0 {
+		return speedResult{}
+	}
+	return p.items[0]
+}
+
+// list 返回按速度降序排好的副本。
+func (p *resultPool) list() []speedResult {
+	out := make([]speedResult, len(p.items))
+	copy(out, p.items)
+	return out
+}
+
+// outcomeFromPool 把结果池转成 testOutcome。
+//
+// 顶层的 IP/Port/MaxSpeed 等字段填最快的那一个：界面和历史记录原来就读这些，
+// 保持不变意味着「只要 1 个结果」这条路径的行为和以前完全一致。
+func outcomeFromPool(pool *resultPool) testOutcome {
+	items := pool.list()
+	if len(items) == 0 {
+		return testOutcome{}
+	}
+	top := items[0]
+	return testOutcome{
+		IP:         top.IP,
+		Port:       top.Port,
+		MaxSpeed:   top.MaxSpeed,
+		LatencyMs:  top.LatencyMs,
+		DataCenter: top.DataCenter,
+		Country:    top.Country,
+		Results:    items,
+	}
 }

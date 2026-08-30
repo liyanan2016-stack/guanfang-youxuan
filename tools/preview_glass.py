@@ -12,7 +12,7 @@
 import os
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
-W, H = 420, 900          # 逻辑 dp 画布，约等于一台 6.1 寸手机
+W, H = 420, 1010         # 逻辑 dp 画布，约等于一台 6.1 寸手机
 SS = 2                   # 超采样倍数，抗锯齿
 
 CJK = "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc"
@@ -142,8 +142,8 @@ def render(t):
     text((W / 2, y + 15), "开始扫描", font(16), "#FFFFFF", anchor="ma")
 
     y += 66
-    # ---- 结果卡 ----
-    ch = 244
+    # ---- 结果卡（演示选了输出 5 个：主结果 + 4 条备选）----
+    ch = 372
     vgrad(img, (14, y, W - 14, y + ch), 20, t["glass_top"], t["glass_bottom"], t["stroke"])
     d = dr()
     rr(d, (32, y + 18, W - 32, y + 64), 14, fill=t["res_bg"], outline=t["res_border"])
@@ -161,9 +161,23 @@ def render(t):
         text((mx + 12, my + 7), k, font(11), t["text2"])
         text((mx + 12, my + 23), v, font(14), col)
 
+    # 备选地址。只给地址/速度/延迟 —— 备选是"第一个不好用就换下一个"，
+    # 机房和用时对这个决策没帮助。
+    text((32, y + 248), "备选地址（4 个，点击复制）", font(11), t["text2"])
+    alts = [("172.64.80.5:443", "22.4 MB/s", "41ms"),
+            ("104.18.32.7:443", "18.1 MB/s", "45ms"),
+            ("162.159.36.2:443", "9.6 MB/s", "62ms"),
+            ("188.114.97.8:443", "4.2 MB/s", "88ms")]
+    for i, (addr, sp, lat) in enumerate(alts):
+        ry = y + 266 + i * 26
+        rr(d, (32, ry, W - 32, ry + 24), 12, fill=t["metric"], outline=t["hair"])
+        text((42, ry + 6), str(i + 2), font(10), t["muted"])
+        text((58, ry + 5), addr, font(11.5, mono=True), t["primary"])
+        text((W - 42, ry + 6), sp + " · " + lat, font(10), t["success"], anchor="ra")
+
     y += ch + 14
     # ---- 参数卡（端口/地区已折叠，SNI 不折叠留在卡内）----
-    ph = 320
+    ph = 372
     vgrad(img, (14, y, W - 14, y + ph), 20, t["glass_top"], t["glass_bottom"], t["stroke"])
     d = dr()
     text((32, y + 16), "扫描参数", font(15), t["text"])
@@ -184,12 +198,24 @@ def render(t):
     text((W - 124, y + 79), "1", font(15), t["text"])
     text((W - 74, y + 82), "Mbps", font(10), t["muted"])
 
-    d.line([32 * SS, (y + 124) * SS, (W - 32) * SS, (y + 124) * SS], fill=t["hair"], width=SS)
+    # 输出数量：1/5/10 三档。不开放自由输入 —— 这个值直接决定扫描时长，
+    # 每个结果都要占一次完整测速预算。
+    text((32, y + 128), "输出数量", font(12), t["text2"])
+    text((32, y + 146), "只要最快的一个，出结果最快", font(10), t["muted"])
+    rr(d, (W - 176, y + 124, W - 32, y + 168), 18, fill=t["inp"], outline=t["hair"])
+    for i, (lbl, sel) in enumerate([("1", True), ("5", False), ("10", False)]):
+        bx = W - 172 + i * 48
+        if sel:
+            rr(d, (bx, y + 128, bx + 44, y + 164), 15, fill=t["primary"])
+        text((bx + 22, y + 137), lbl, font(13),
+             "#FFFFFF" if sel else t["text2"], anchor="ma")
+
+    d.line([32 * SS, (y + 182) * SS, (W - 32) * SS, (y + 182) * SS], fill=t["hair"], width=SS)
 
     # 折叠行：标题在左，当前值摘要 + 箭头在右。
     # 摘要保证折叠不藏信息 —— 不展开也知道现在测的是哪些端口 / 哪些地区。
     for i, (title, summary) in enumerate([("端口", "443"), ("落地地区", "不限")]):
-        ry = y + 124 + i * 48
+        ry = y + 182 + i * 48
         text((32, ry + 15), title, font(14), t["text"])
         text((W - 58, ry + 16), summary, font(13), t["text2"], anchor="ra")
         ax, ay = W - 44, ry + 24           # 箭头，收起时朝下
@@ -200,12 +226,11 @@ def render(t):
         d.line([32 * SS, (ry + 48) * SS, (W - 32) * SS, (ry + 48) * SS],
                fill=t["hair"], width=SS)
 
-    # SNI 不折叠：v1.7 起「能不能回源到你的服务器」这项校验完全依赖它
-    text((32, y + 232), "你的节点域名（SNI / Host）", font(12.5), t["text"])
-    text((32, y + 252), "强烈建议填写，填了才会验证 CF 能否回源到你的服务器",
-         font(10), t["muted"])
-    rr(d, (32, y + 272, W - 32, y + 308), 14, fill=t["inp"], outline=t["hair"])
-    text((44, y + 283), "your.domain.com", font(13), t["muted"])
+    # SNI 不折叠：它决定「能不能回源到你的服务器」这项校验
+    text((32, y + 288), "你的节点域名（SNI / Host）", font(12.5), t["text"])
+    text((32, y + 306), "强烈建议填写，填了才会验证 CF 能否回源", font(10), t["muted"])
+    rr(d, (32, y + 324, W - 32, y + 360), 14, fill=t["inp"], outline=t["hair"])
+    text((44, y + 335), "your.domain.com", font(13), t["muted"])
 
     # ---- 底栏 ----
     d = dr()
@@ -230,6 +255,6 @@ d.text((pad * 2 + W * 1.5, pad), "深色模式", font=f, fill="#E8ECF4", anchor=
 canvas.paste(light, (pad, pad + label))
 canvas.paste(dark, (pad * 2 + W, pad + label))
 
-out = os.path.join(os.path.dirname(os.path.abspath(__file__)), "preview-v1.12-glass.png")
+out = os.path.join(os.path.dirname(os.path.abspath(__file__)), "preview-v1.13-glass.png")
 canvas.save(out)
 print(out)

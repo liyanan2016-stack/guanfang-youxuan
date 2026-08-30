@@ -118,6 +118,9 @@ func handleScan(w http.ResponseWriter, r *http.Request) {
 		Ports     string `json:"ports"`
 		Countries string `json:"countries"`
 		SNI       string `json:"sni"`
+		// Count 要输出几个结果（1/5/10）。缺省为 0，核心层会收敛成 1，
+		// 所以老版本前端不传这个字段也照样是旧行为。
+		Count int `json:"count"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, map[string]string{"error": "参数解析失败: " + err.Error()})
@@ -139,7 +142,8 @@ func handleScan(w http.ResponseWriter, r *http.Request) {
 	stateMu.Unlock()
 
 	go func() {
-		res := better.GetIPs(req.V4, req.UseTLS, req.Bandwidth, req.Ports, req.Countries, req.SNI)
+		res := better.GetIPs(req.V4, req.UseTLS, req.Bandwidth, req.Ports, req.Countries, req.SNI,
+			req.Count)
 
 		stateMu.Lock()
 		lastResult = res
@@ -159,21 +163,57 @@ func handleScan(w http.ResponseWriter, r *http.Request) {
 			Country       string `json:"country"`
 			Elapsed       int    `json:"elapsed"`
 			Cancelled     bool   `json:"cancelled"`
+			// Results 多结果列表。选了输出 5/10 个时这里有多条，
+			// 全部写进历史 —— 只记最快那一条的话，用户关掉窗口就
+			// 再也找不回另外几个备选了。
+			Results []struct {
+				IP            string `json:"ip"`
+				Port          int    `json:"port"`
+				Address       string `json:"address"`
+				RealBandwidth int    `json:"realBandwidth"`
+				MaxSpeed      int    `json:"maxSpeed"`
+				LatencyMs     int    `json:"latencyMs"`
+				DataCenter    string `json:"dataCenter"`
+				Country       string `json:"country"`
+			} `json:"results"`
 		}
 		if json.Unmarshal([]byte(res), &parsed) == nil && parsed.IP != "" && !parsed.Cancelled {
-			appendHistory(histItem{
-				IP:            parsed.IP,
-				Port:          parsed.Port,
-				Address:       parsed.Address,
-				Bandwidth:     parsed.Bandwidth,
-				RealBandwidth: parsed.RealBandwidth,
-				MaxSpeed:      parsed.MaxSpeed,
-				LatencyMs:     parsed.LatencyMs,
-				DataCenter:    parsed.DataCenter,
-				Country:       parsed.Country,
-				Elapsed:       parsed.Elapsed,
-				Time:          time.Now().Format("2006-01-02 15:04"),
-			})
+			now := time.Now().Format("2006-01-02 15:04")
+			if len(parsed.Results) > 0 {
+				// 倒序写入：appendHistory 把新的插在最前面，
+				// 顺序写会让最慢的那个排到列表顶端
+				for i := len(parsed.Results) - 1; i >= 0; i-- {
+					it := parsed.Results[i]
+					appendHistory(histItem{
+						IP:            it.IP,
+						Port:          it.Port,
+						Address:       it.Address,
+						Bandwidth:     parsed.Bandwidth,
+						RealBandwidth: it.RealBandwidth,
+						MaxSpeed:      it.MaxSpeed,
+						LatencyMs:     it.LatencyMs,
+						DataCenter:    it.DataCenter,
+						Country:       it.Country,
+						Elapsed:       parsed.Elapsed,
+						Time:          now,
+					})
+				}
+			} else {
+				// 老核心层不返回 results 时回落到顶层字段
+				appendHistory(histItem{
+					IP:            parsed.IP,
+					Port:          parsed.Port,
+					Address:       parsed.Address,
+					Bandwidth:     parsed.Bandwidth,
+					RealBandwidth: parsed.RealBandwidth,
+					MaxSpeed:      parsed.MaxSpeed,
+					LatencyMs:     parsed.LatencyMs,
+					DataCenter:    parsed.DataCenter,
+					Country:       parsed.Country,
+					Elapsed:       parsed.Elapsed,
+					Time:          now,
+				})
+			}
 		}
 	}()
 
