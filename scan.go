@@ -1511,10 +1511,19 @@ func cloudflareTest(ipType int, useTLS bool, taskNum int, speed int, filter scan
 	}
 
 	// 一次洗牌 + 游标推进：同一次扫描内不会重复测同一个子网
-	sampler := newSubnetSampler(ipList)
+	base := newSubnetSampler(ipList)
 
 	ports := filter.portList(useTLS)
-	batchSize = roundBatchSize(batchSize, len(ports), sampler.total())
+	batchSize = roundBatchSize(batchSize, len(ports), base.total())
+
+	// 选了地区时，在正式测试之前先做一轮廉价侦察：每个子网只探 1 个 IP、
+	// 只拿 CF-RAY 里的 colo，据此排除落地国家不符的整个子网。
+	//
+	// 不选地区时不做侦察 —— 那种情况下侦察纯属额外开销，没有任何可排除的东西。
+	var sampler batchSampler = base
+	if len(filter.Countries) > 0 {
+		sampler = newRegionSampler(base, ipType, ports[0], useTLS, sni, filter, taskNum)
+	}
 
 	// 记录历轮中实测最快的 IP。轮次用尽仍未达标时把它返回，
 	// 至少让用户拿到一个可用结果，而不是空手而归。
