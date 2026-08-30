@@ -66,6 +66,18 @@ public class MainActivity extends AppCompatActivity {
     private TextView txtDataCenter;
     private TextView txtElapsed;
     private TextView txtEmptyHistory;
+
+    // 三个分页与底部导航。分页靠 visibility 切换而不是重建视图：
+    // 切页不能丢掉已填的输入和滚动位置，更不能打断正在跑的扫描。
+    private View pageScan;
+    private View pageConfig;
+    private View pageHistory;
+    private View navScan;
+    private View navConfig;
+    private View navHistory;
+    private TextView txtPageTitle;
+    /** 0=扫描 1=配置 2=历史。 */
+    private int currentTab = 0;
     private View layoutProgress;
     private View layoutResult;
     private LinearLayout layoutHistoryList;
@@ -143,7 +155,19 @@ public class MainActivity extends AppCompatActivity {
         txtDataCenter = findViewById(R.id.txtDataCenter);
         txtElapsed = findViewById(R.id.txtElapsed);
         txtEmptyHistory = findViewById(R.id.txtEmptyHistory);
+        pageScan = findViewById(R.id.pageScan);
+        pageConfig = findViewById(R.id.pageConfig);
+        pageHistory = findViewById(R.id.pageHistory);
+        navScan = findViewById(R.id.navScan);
+        navConfig = findViewById(R.id.navConfig);
+        navHistory = findViewById(R.id.navHistory);
+        txtPageTitle = findViewById(R.id.txtPageTitle);
+        navScan.setOnClickListener(v -> selectTab(0));
+        navConfig.setOnClickListener(v -> selectTab(1));
+        navHistory.setOnClickListener(v -> selectTab(2));
         layoutHistoryList = findViewById(R.id.layoutHistoryList);
+        // 放在所有 findViewById 之后：selectTab 会碰到分页内的视图
+        selectTab(0);
 
         Better.setCacheDir(getFilesDir().getAbsolutePath());
         loadScanSettings();
@@ -536,6 +560,10 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void showScanning() {
+        // 扫描的进度和结果都在扫描页，从别的页触发时自动跳过去
+        if (currentTab != 0) {
+            selectTab(0);
+        }
         txtProgressTitle.setText("执行状态");
         layoutProgress.setVisibility(View.VISIBLE);
         progressBar.setVisibility(View.VISIBLE);
@@ -638,6 +666,42 @@ public class MainActivity extends AppCompatActivity {
         // 节点域名不再折叠，直接回填即可
         editSNI.setText(getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
                 .getString(PREFS_SNI, ""));
+    }
+
+    /**
+     * 切换分页。0=扫描 1=配置 2=历史。
+     *
+     * <p>三页始终存在，只切 visibility：切页不能丢掉用户已填的节点域名、
+     * 端口选择和滚动位置，更不能打断正在跑的扫描。
+     */
+    private void selectTab(int tab) {
+        currentTab = tab;
+        pageScan.setVisibility(tab == 0 ? View.VISIBLE : View.GONE);
+        pageConfig.setVisibility(tab == 1 ? View.VISIBLE : View.GONE);
+        pageHistory.setVisibility(tab == 2 ? View.VISIBLE : View.GONE);
+
+        highlightNav(navScan, R.id.navScanIcon, R.id.navScanLabel, tab == 0);
+        highlightNav(navConfig, R.id.navConfigIcon, R.id.navConfigLabel, tab == 1);
+        highlightNav(navHistory, R.id.navHistoryIcon, R.id.navHistoryLabel, tab == 2);
+
+        if (tab == 0) {
+            txtPageTitle.setText("CF 优选 IP");
+        } else if (tab == 1) {
+            txtPageTitle.setText("扫描配置");
+        } else {
+            txtPageTitle.setText("历史记录");
+            // 进历史页时刷一次：扫描可能在别的页面完成
+            renderHistory();
+        }
+    }
+
+    /** 选中的导航项文字用主色，未选中用次要色。图标只改透明度。 */
+    private void highlightNav(View item, int iconId, int labelId, boolean active) {
+        TextView icon = item.findViewById(iconId);
+        TextView label = item.findViewById(labelId);
+        icon.setAlpha(active ? 1f : 0.45f);
+        label.setTextColor(getColor(active ? R.color.primary : R.color.text_secondary));
+        label.setTypeface(null, active ? android.graphics.Typeface.BOLD : android.graphics.Typeface.NORMAL);
     }
 
     private void saveScanSettings() {
