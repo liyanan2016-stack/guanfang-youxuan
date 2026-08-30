@@ -46,10 +46,8 @@ public class MainActivity extends AppCompatActivity {
     private EditText editBandwidth;
     private EditText editCountries;
     private EditText editSNI;
-    private LinearLayout layoutPorts;
-    private LinearLayout layoutRegions;
-    private LinearLayout layoutAdvanced;
-    private TextView txtAdvancedToggle;
+    private FlowLayout layoutPorts;
+    private FlowLayout layoutRegions;
     private TextView txtPortHint;
     private Button btnScan;
     private Button btnCancel;
@@ -125,8 +123,6 @@ public class MainActivity extends AppCompatActivity {
         editSNI = findViewById(R.id.editSNI);
         layoutPorts = findViewById(R.id.layoutPorts);
         layoutRegions = findViewById(R.id.layoutRegions);
-        layoutAdvanced = findViewById(R.id.layoutAdvanced);
-        txtAdvancedToggle = findViewById(R.id.txtAdvancedToggle);
         txtPortHint = findViewById(R.id.txtPortHint);
         btnScan = findViewById(R.id.btnScan);
         btnCancel = findViewById(R.id.btnCancel);
@@ -186,7 +182,6 @@ public class MainActivity extends AppCompatActivity {
         btnUpdate.setOnClickListener(v -> updateData());
         btnClearHistory.setOnClickListener(v -> clearScanHistory());
 
-        txtAdvancedToggle.setOnClickListener(v -> toggleAdvanced());
         // TLS 开关切换时端口集合完全不同（80 系 vs 443 系），必须重建。
         // 已选的端口在新模式下不合法，留着会让扫描全灭。
         checkTLS.setOnCheckedChangeListener((v, checked) -> rebuildPortChips());
@@ -194,13 +189,6 @@ public class MainActivity extends AppCompatActivity {
         rebuildPortChips();
 
         renderHistory();
-    }
-
-    /** 展开/收起高级选项。默认收起：SNI 填错会导致全部测不通。 */
-    private void toggleAdvanced() {
-        boolean show = layoutAdvanced.getVisibility() != View.VISIBLE;
-        layoutAdvanced.setVisibility(show ? View.VISIBLE : View.GONE);
-        txtAdvancedToggle.setText(show ? "▾ 高级选项（节点域名 / SNI）" : "▸ 高级选项（节点域名 / SNI）");
     }
 
     /**
@@ -280,10 +268,9 @@ public class MainActivity extends AppCompatActivity {
     /** 可点选的筹码。用 TextView + setSelected，不引入额外依赖。 */
     private TextView makeChip(String label, boolean selected, ChipToggle onToggle) {
         TextView chip = new TextView(this);
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT, dp(34));
-        lp.setMarginEnd(dp(8));
-        chip.setLayoutParams(lp);
+        // 间距交给 FlowLayout 统一管（原来靠 marginEnd，换行后行尾会多出空隙）
+        chip.setLayoutParams(new ViewGroup.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, dp(34)));
         chip.setBackgroundResource(R.drawable.chip_bg);
         chip.setTextColor(getResources().getColorStateList(R.color.chip_text, getTheme()));
         chip.setTextSize(13f);
@@ -648,13 +635,9 @@ public class MainActivity extends AppCompatActivity {
 
         editCountries.setText(getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
                 .getString(PREFS_COUNTRIES_EXTRA, ""));
+        // 节点域名不再折叠，直接回填即可
         editSNI.setText(getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
                 .getString(PREFS_SNI, ""));
-        // 上次填过 SNI 就直接展开高级选项，否则用户会以为设置丢了
-        if (editSNI.getText().length() > 0) {
-            layoutAdvanced.setVisibility(View.VISIBLE);
-            txtAdvancedToggle.setText("▾ 高级选项（节点域名 / SNI）");
-        }
     }
 
     private void saveScanSettings() {
