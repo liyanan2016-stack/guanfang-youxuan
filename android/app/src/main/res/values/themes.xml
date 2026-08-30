@@ -5,8 +5,11 @@
         <item name="colorPrimaryDark">@color/primary_dark</item>
         <item name="colorAccent">@color/accent</item>
         <item name="android:windowBackground">@color/page_background</item>
-        <item name="android:statusBarColor">@color/primary_dark</item>
-        <item name="android:navigationBarColor">@color/page_background</item>
-        <item name="android:windowLightStatusBar">false</item>
+        <!-- 状态栏和导航栏都设为透明：背景那层光斑铺满整个窗口，
+             状态栏染成深蓝会在顶部切出一条突兀的色带。
+             浅色玻璃配深色状态栏图标。 -->
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowLightStatusBar">true</item>
     </style>
 </resources>

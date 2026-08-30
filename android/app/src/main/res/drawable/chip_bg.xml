@@ -20,11 +20,11 @@
     </item>
     <item>
         <shape android:shape="rectangle">
-            <solid android:color="@color/surface_input" />
+            <solid android:color="@color/glass_input" />
             <corners android:radius="16dp" />
             <stroke
                 android:width="1dp"
-                android:color="@color/divider" />
+                android:color="@color/glass_hairline" />
         </shape>
     </item>
 </selector>

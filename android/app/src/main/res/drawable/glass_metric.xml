@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 结果里的指标小块。最透的一档，避免六个方块抢走 IP 地址的注意力。 -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <corners android:radius="14dp" />
+    <solid android:color="@color/glass_metric" />
+    <stroke
+        android:width="1dp"
+        android:color="@color/glass_hairline" />
+</shape>

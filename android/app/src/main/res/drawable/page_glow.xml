@@ -1,0 +1,73 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 背景光斑。液态玻璃的前提是"底下有东西可透" —— 纯色背景上做半透明
+     卡片只会显得灰扑扑，必须先铺一层有颜色变化的底。
+
+     四团光斑覆盖整个页面高度，这点很重要：只在上半屏铺光斑的话，
+     内容不满一屏时下半屏会露出一大片死板的纯色，卡片区和空白区
+     像两张不同的图拼起来的。
+
+     位置用 layer-list 的 top/bottom/start/end 反向内缩来控制 ——
+     item 的四边内缩多少，椭圆就往相反方向挤，所以数值越大椭圆越偏。
+     API 31 以上还会对这一层做一次高斯模糊把边界化开。 -->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item>
+        <shape android:shape="rectangle">
+            <solid android:color="@color/page_background" />
+        </shape>
+    </item>
+
+    <!-- 左上：主色蓝，压在标题和扫描按钮下面 -->
+    <item
+        android:bottom="480dp"
+        android:end="130dp"
+        android:top="-120dp">
+        <shape android:shape="oval">
+            <gradient
+                android:type="radial"
+                android:gradientRadius="70%p"
+                android:startColor="@color/blob_a"
+                android:endColor="@color/blob_none" />
+        </shape>
+    </item>
+
+    <!-- 右上：橙色暖调，和左上的蓝在中间混出紫 -->
+    <item
+        android:bottom="520dp"
+        android:start="110dp"
+        android:top="-90dp">
+        <shape android:shape="oval">
+            <gradient
+                android:type="radial"
+                android:gradientRadius="62%p"
+                android:startColor="@color/blob_b"
+                android:endColor="@color/blob_none" />
+        </shape>
+    </item>
+
+    <!-- 右中下：青色 -->
+    <item
+        android:bottom="120dp"
+        android:start="60dp"
+        android:top="300dp">
+        <shape android:shape="oval">
+            <gradient
+                android:type="radial"
+                android:gradientRadius="72%p"
+                android:startColor="@color/blob_c"
+                android:endColor="@color/blob_none" />
+        </shape>
+    </item>
+
+    <!-- 左下：紫蓝，专门补底部空白区，避免内容不满一屏时下半截发灰 -->
+    <item
+        android:end="90dp"
+        android:top="440dp">
+        <shape android:shape="oval">
+            <gradient
+                android:type="radial"
+                android:gradientRadius="75%p"
+                android:startColor="@color/blob_d"
+                android:endColor="@color/blob_none" />
+        </shape>
+    </item>
+</layer-list>

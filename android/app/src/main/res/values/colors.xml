@@ -8,7 +8,7 @@
     <color name="danger">#D92D20</color>
     <color name="success">#0E8F5A</color>
     <color name="warning">#B45C00</color>
-    <color name="page_background">#F5F7FB</color>
+    <color name="page_background">#E6ECF7</color>
     <color name="card_background">#FFFFFF</color>
     <color name="surface_raised">#FFFFFF</color>
     <color name="surface_muted">#EEF3FA</color>
@@ -23,4 +23,37 @@
     <color name="metric_background">#F6F8FC</color>
     <color name="success_text">#0E8F5A</color>
     <color name="ic_launcher_background">#FFFFFF</color>
+
+    <!-- ============ 液态玻璃 ============
+
+         做法：页面底层铺几团柔和的彩色光斑（page_gradient），上层的卡片
+         用半透明白 + 亮色描边，让光斑透上来。这就是玻璃感的来源 ——
+         不是给卡片加个灰色半透明就行，底下必须有东西可透。
+
+         Android 12（API 31）以上再对光斑层加一次真实高斯模糊，
+         光斑边界化开，更接近"液态"。API 24~30 没有 RenderEffect，
+         靠径向渐变本身的柔和过渡兜底，不做降级弹窗、不影响功能。
+
+         浅色模式用白玻璃：填充给到 78%~62% 不透明，比常见的
+         glassmorphism 更实一些 —— 这个界面里有大量 11sp~13sp 的
+         说明文字，玻璃太透会直接影响可读性。 -->
+    <color name="glass_fill_top">#B8FFFFFF</color>
+    <color name="glass_fill_bottom">#8FFFFFFF</color>
+    <color name="glass_stroke">#C4FFFFFF</color>
+    <color name="glass_input">#75FFFFFF</color>
+    <color name="glass_metric">#59FFFFFF</color>
+    <color name="glass_bar">#CCFFFFFF</color>
+    <!-- 浅色模式的发丝线必须是暗色，不能跟 glass_stroke 一样用白：
+         input/metric 这些内嵌元素坐在近白的卡片上，白描边等于没画。
+         卡片外缘用白（glass_stroke，衬在彩色背景上是高光），
+         卡片内部用这条暗线 —— 同一套玻璃语言，受光位置不同。 -->
+    <color name="glass_hairline">#241B2C55</color>
+
+    <!-- 背景光斑。alpha 压到 0x30 上下：再浓就会把卡片上的
+         正文文字对比度拉下来。 -->
+    <color name="blob_a">#5E1463FF</color>
+    <color name="blob_b">#4FE36C2C</color>
+    <color name="blob_c">#4700B8A9</color>
+    <color name="blob_d">#3D7C4DFF</color>
+    <color name="blob_none">#00000000</color>
 </resources>

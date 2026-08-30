@@ -10,7 +10,7 @@
     <!-- 夜间模式必须单独给 danger：亮色模式的 #D92D20 是深红，
          放在深灰背景上对比度不足，取消按钮和删除按钮都会看不清 -->
     <color name="danger">#FF6B5E</color>
-    <color name="page_background">#101318</color>
+    <color name="page_background">#0F131A</color>
     <color name="card_background">#191D24</color>
     <color name="surface_raised">#202632</color>
     <color name="surface_muted">#252D3A</color>
@@ -25,4 +25,25 @@
     <color name="metric_background">#151A22</color>
     <color name="success_text">#45C48A</color>
     <color name="ic_launcher_background">#FFFFFF</color>
+
+    <!-- 液态玻璃（深色）。
+
+         深色模式不能照抄浅色的"半透明白"：白色蒙在深背景上会把整块
+         卡片提亮成灰白，看着像没做完的占位图。这里改成半透明的
+         深蓝灰填充 + 微弱的白色描边 —— 描边才是玻璃"边缘反光"的来源，
+         深色下它比填充更重要。 -->
+    <color name="glass_fill_top">#C22A3345</color>
+    <color name="glass_fill_bottom">#A81C2331</color>
+    <color name="glass_stroke">#2EFFFFFF</color>
+    <color name="glass_input">#8A141A24</color>
+    <color name="glass_metric">#6B222B39</color>
+    <color name="glass_bar">#D11A2029</color>
+    <color name="glass_hairline">#1FFFFFFF</color>
+
+    <!-- 深色下光斑要更亮才透得出来（浅色用 0x30 上下，这里给到 0x50） -->
+    <color name="blob_a">#8A3D78FF</color>
+    <color name="blob_b">#6BFF8A4C</color>
+    <color name="blob_c">#5C00D6C4</color>
+    <color name="blob_d">#669B6BFF</color>
+    <color name="blob_none">#00000000</color>
 </resources>

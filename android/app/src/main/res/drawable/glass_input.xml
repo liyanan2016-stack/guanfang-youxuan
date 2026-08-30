@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 输入框：比卡片更透一档，形成层次（卡片浮在页面上，输入框凹在卡片里）。 -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <corners android:radius="14dp" />
+    <solid android:color="@color/glass_input" />
+    <stroke
+        android:width="1dp"
+        android:color="@color/glass_hairline" />
+</shape>

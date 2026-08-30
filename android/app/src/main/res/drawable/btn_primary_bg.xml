@@ -1,21 +1,28 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- 主按钮。渐变自上而下由亮到深，和玻璃卡片的受光方向一致；
+     圆角 14dp 落在 chip(16) 与 input(14) 这一档，卡片 20dp 更大，
+     形成"卡片 > 控件"的层级。 -->
 <selector xmlns:android="http://schemas.android.com/apk/res/android">
     <item android:state_enabled="false">
         <shape android:shape="rectangle">
             <solid android:color="@color/primary_disabled" />
-            <corners android:radius="8dp" />
+            <corners android:radius="14dp" />
         </shape>
     </item>
     <item android:state_pressed="true">
         <shape android:shape="rectangle">
             <solid android:color="@color/primary_pressed" />
-            <corners android:radius="8dp" />
+            <corners android:radius="14dp" />
         </shape>
     </item>
     <item>
         <shape android:shape="rectangle">
-            <solid android:color="@color/primary" />
-            <corners android:radius="8dp" />
+            <corners android:radius="14dp" />
+            <gradient
+                android:angle="270"
+                android:startColor="@color/primary"
+                android:endColor="@color/primary_pressed"
+                android:type="linear" />
         </shape>
     </item>
 </selector>

@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 顶栏和底栏：最不透的一档。它们始终盖在滚动内容上方，
+     太透会让下面滑过的文字透上来，变成一团乱。 -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <solid android:color="@color/glass_bar" />
+</shape>

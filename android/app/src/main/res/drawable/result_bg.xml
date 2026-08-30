@@ -1,7 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- 优选出来的 IP 地址框。整个界面最重要的一条信息，所以它是唯一
+     保留明显色底的容器（其余都是中性玻璃）—— 用户一眼要能找到它。
+     渐变方向与卡片一致，圆角 14dp 对齐 input/metric 这一档。 -->
 <shape xmlns:android="http://schemas.android.com/apk/res/android"
     android:shape="rectangle">
-    <solid android:color="@color/result_background" />
+    <corners android:radius="14dp" />
+    <gradient
+        android:angle="270"
+        android:startColor="@color/result_background"
+        android:endColor="@color/glass_input"
+        android:type="linear" />
     <stroke android:width="1dp" android:color="@color/result_border" />
-    <corners android:radius="8dp" />
 </shape>

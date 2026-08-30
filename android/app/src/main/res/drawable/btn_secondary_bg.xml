@@ -1,24 +1,25 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- 次按钮：玻璃填充 + 亮描边，和卡片同一套语言，只是更小更透。 -->
 <selector xmlns:android="http://schemas.android.com/apk/res/android">
     <item android:state_enabled="false">
         <shape android:shape="rectangle">
-            <solid android:color="@color/surface_muted" />
-            <stroke android:width="1dp" android:color="@color/divider" />
-            <corners android:radius="8dp" />
+            <solid android:color="@color/glass_metric" />
+            <stroke android:width="1dp" android:color="@color/glass_hairline" />
+            <corners android:radius="14dp" />
         </shape>
     </item>
     <item android:state_pressed="true">
         <shape android:shape="rectangle">
             <solid android:color="@color/result_background" />
             <stroke android:width="1dp" android:color="@color/result_border" />
-            <corners android:radius="8dp" />
+            <corners android:radius="14dp" />
         </shape>
     </item>
     <item>
         <shape android:shape="rectangle">
-            <solid android:color="@color/surface_raised" />
-            <stroke android:width="1dp" android:color="@color/divider" />
-            <corners android:radius="8dp" />
+            <solid android:color="@color/glass_input" />
+            <stroke android:width="1dp" android:color="@color/glass_hairline" />
+            <corners android:radius="14dp" />
         </shape>
     </item>
 </selector>
