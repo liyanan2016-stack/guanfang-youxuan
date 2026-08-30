@@ -42,6 +42,16 @@ public class SpringScrollView extends ScrollView {
     private float pull;
     private ValueAnimator springAnim;
 
+    /**
+     * 最近一次 fling 的初速度（px/s）。
+     *
+     * <p>惯性滑到边界时要按剩余速度决定弹多深 —— 慢慢滑到底只该轻轻一碰，
+     * 猛甩到底该弹得明显。没有这个值就只能给固定幅度，快慢一个样。
+     */
+    private int flingVelocity;
+    /** 惯性撞边反弹是否正在进行，避免同一次 fling 触发多轮 */
+    private boolean bouncing;
+
     /** 滚动位置变化回调，用来让顶栏在内容滚动后浮出分隔线。 */
     public interface OnScrollProgressListener {
         void onScrollProgress(int scrollY);
@@ -73,19 +83,33 @@ public class SpringScrollView extends ScrollView {
     }
 
     @Override
+    public void fling(int velocityY) {
+        flingVelocity = velocityY;
+        super.fling(velocityY);
+    }
+
+    @Override
     protected boolean overScrollBy(int deltaX, int deltaY, int scrollX, int scrollY,
                                    int scrollRangeX, int scrollRangeY,
                                    int maxOverScrollX, int maxOverScrollY,
                                    boolean isTouchEvent) {
-        // 只接手手指拖动。惯性滑动（fling）到边界时不做位移——那会让每次
-        // 快滑都以一下弹跳收尾，翻几屏就开始晕。
+        boolean beyondTop = scrollY + deltaY < 0;
+        boolean beyondBottom = scrollY + deltaY > scrollRangeY;
+
+        // 惯性滑动撞到边界。
+        //
+        // 这里不能直接交给 super 了事：那样滚动条走到 0 或 scrollRangeY 就
+        // 硬生生停住，就是那种"突然顿一下"的感觉。真实的物理是撞上去之后
+        // 还要形变一下再回弹。
+        //
+        // 弹多深按剩余速度算：慢慢滑到底只轻轻一碰，猛甩到底弹得明显。
         if (!isTouchEvent) {
+            if ((beyondTop || beyondBottom) && !bouncing && pull == 0f) {
+                bounceFromFling(beyondTop);
+            }
             return super.overScrollBy(deltaX, deltaY, scrollX, scrollY,
                     scrollRangeX, scrollRangeY, maxOverScrollX, maxOverScrollY, false);
         }
-
-        boolean beyondTop = scrollY + deltaY < 0;
-        boolean beyondBottom = scrollY + deltaY > scrollRangeY;
 
         // pull != 0 时必须继续接手，直到位移收回 0：否则手指还没回到原位，
         // 内容就已经开始正常滚动，两段动作会错开
@@ -114,7 +138,11 @@ public class SpringScrollView extends ScrollView {
     public boolean onTouchEvent(MotionEvent ev) {
         switch (ev.getActionMasked()) {
             case MotionEvent.ACTION_DOWN:
+                // 手指按下就中断反弹：正在弹的时候用户又摸了屏幕，
+                // 继续弹会和新的拖动打架
                 cancelSpring();
+                bouncing = false;
+                flingVelocity = 0;
                 break;
             case MotionEvent.ACTION_UP:
             case MotionEvent.ACTION_CANCEL:
@@ -144,6 +172,56 @@ public class SpringScrollView extends ScrollView {
         if (child != null) {
             child.setTranslationY(pull);
         }
+    }
+
+    /**
+     * 惯性撞到边界后的反弹。
+     *
+     * <p>分两段：先按剩余速度冲出去一点（形变），再弹回来。只做"弹回"
+     * 那一半的话，内容根本没离开过边界，看不出撞击。
+     *
+     * <p>冲出的距离按速度线性折算并夹在 maxPull/3 以内 —— 惯性撞边的幅度
+     * 应该明显小于手动拉拽，不然快滑翻页时每次到底都晃一大下。
+     *
+     * @param atTop true=撞到顶部（内容该往下让），false=撞到底部
+     */
+    private void bounceFromFling(boolean atTop) {
+        float speed = Math.abs(flingVelocity);
+        if (speed < 800f) {
+            // 速度太小说明是慢慢滑到底的，不该有反弹。
+            // 这个阈值以下人眼看不出撞击，弹了反而像手抖。
+            return;
+        }
+
+        // 12000 px/s 差不多是用力甩一下的量级，以此为满幅参照
+        float ratio = Math.min(speed / 12000f, 1f);
+        float depth = (maxPull / 3f) * ratio;
+        if (depth < 1f) return;
+
+        bouncing = true;
+        flingVelocity = 0;
+        float target = atTop ? depth : -depth;
+
+        cancelSpring();
+        // 第一段：冲出去。用减速曲线，因为这是速度在耗尽的过程。
+        // 时长按幅度缩放，小幅度弹得快，不然轻碰一下也要等 200ms。
+        springAnim = ValueAnimator.ofFloat(0f, target);
+        springAnim.setDuration((long) (110 + 70 * ratio));
+        springAnim.setInterpolator(Anim.EASE_OUT);
+        springAnim.addUpdateListener(a -> {
+            pull = (float) a.getAnimatedValue();
+            applyPull();
+        });
+        springAnim.addListener(new AnimatorListenerAdapter() {
+            @Override
+            public void onAnimationEnd(Animator animation) {
+                // 第二段：弹回。springBack 自带过冲，两段接起来就是
+                // "撞—形变—回弹—微微过冲"这一串完整动作。
+                bouncing = false;
+                springBack();
+            }
+        });
+        springAnim.start();
     }
 
     private void springBack() {

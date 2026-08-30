@@ -40,13 +40,13 @@ import com.cf.ip.better.Better;
 
 public class MainActivity extends AppCompatActivity {
 
-    private RadioGroup groupIPVersion;
-    private RadioButton radioIPv4;
-    private RadioButton radioIPv6;
-    private RadioGroup groupCount;
+    private SegmentedBar segIPVersion;
+    private SegmentedBar segCount;
     private TextView txtCountHint;
     /** 当前选中的输出数量，档位由核心层 Better.resultCounts() 给出 */
     private int resultCount = 1;
+    /** 档位列表，下标与 segCount 的格子一一对应 */
+    private java.util.List<Integer> countOptions = new java.util.ArrayList<>();
     private Switch checkTLS;
     private EditText editBandwidth;
     private EditText editCountries;
@@ -146,10 +146,10 @@ public class MainActivity extends AppCompatActivity {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
 
-        groupIPVersion = findViewById(R.id.groupIPVersion);
-        radioIPv4 = findViewById(R.id.radioIPv4);
-        radioIPv6 = findViewById(R.id.radioIPv6);
-        groupCount = findViewById(R.id.groupCount);
+        segIPVersion = findViewById(R.id.segIPVersion);
+        segCount = findViewById(R.id.segCount);
+        // 等宽：IPv4/IPv6 标签长度相同，等宽最整齐
+        segIPVersion.setItems(new String[]{"IPv4", "IPv6"}, true);
         txtCountHint = findViewById(R.id.txtCountHint);
         checkTLS = findViewById(R.id.checkTLS);
         editBandwidth = findViewById(R.id.editBandwidth);
@@ -272,13 +272,8 @@ public class MainActivity extends AppCompatActivity {
 
         // TLS 开关切换时端口集合完全不同（80 系 vs 443 系），必须重建。
         // 已选的端口在新模式下不合法，留着会让扫描全灭。
-        // IP 协议分段也给一致的选中反馈：同一张卡里两个分段控件，
-        // 一个有动效一个没有会让人怀疑它们行为不同
-        groupIPVersion.setOnCheckedChangeListener((g, id) -> {
-            View picked = g.findViewById(id);
-            Anim.segmentSelect(picked);
-            saveScanSettings();
-        });
+        // 选中反馈由 SegmentedBar 自己的滑动指示块负责，这里只管存设置
+        segIPVersion.setOnSelectListener(index -> saveScanSettings());
 
         checkTLS.setOnCheckedChangeListener((v, checked) -> rebuildPortChips());
         renderRegionChips();
@@ -325,7 +320,6 @@ public class MainActivity extends AppCompatActivity {
      * 单选控件只会让人怀疑它们行为不同。
      */
     private void buildCountOptions() {
-        groupCount.removeAllViews();
         String csv = Better.resultCounts();
         java.util.List<Integer> counts = new java.util.ArrayList<>();
         for (String part : csv.split(",")) {
@@ -340,63 +334,29 @@ public class MainActivity extends AppCompatActivity {
         if (counts.isEmpty()) {
             counts.add(1);
         }
+        countOptions = counts;
+
+        String[] labels = new String[counts.size()];
+        for (int i = 0; i < counts.size(); i++) {
+            labels[i] = String.valueOf(counts.get(i));
+        }
+        // 不等宽：1 / 5 / 10 标签很短，等宽会把三格拉得很散
+        segCount.setItems(labels, false);
+
         // 保存的值可能不在当前档位里（核心层调整过档位），回落到第一档
-        if (!counts.contains(resultCount)) {
+        int index = counts.indexOf(resultCount);
+        if (index < 0) {
+            index = 0;
             resultCount = counts.get(0);
         }
+        // 静默：这是恢复初值，不该触发回调往 prefs 回写
+        segCount.setSelectedSilently(index);
 
-        for (int i = 0; i < counts.size(); i++) {
-            final int n = counts.get(i);
-            RadioButton rb = new RadioButton(this);
-            // ★ 「数字 1 一直被选中」那个 bug 的根因就在这一行的缺失。
-            //
-            // 动态 new 出来的 View，id 默认是 View.NO_ID（-1）。而 RadioGroup
-            // 全靠 id 记录当前选中项：它内部的 mCheckedId 存的就是 id，
-            // 取消上一个选中项时先判断 mCheckedId != NO_ID 才会动手。
-            //
-            // 三个按钮 id 全是 -1 时：初始那个 checked 的按钮让
-            // mCheckedId 变成 -1，等于 NO_ID；用户点「5」时 RadioGroup 走到
-            // 「取消上一个」这步，发现 mCheckedId == NO_ID 就整段跳过 ——
-            // 「1」的选中态再也没人清除，于是 1 和 5 同时高亮。
-            //
-            // 表现出来就是「1 一直被选中」。
-            rb.setId(View.generateViewId());
-            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(dp(44),
-                    LinearLayout.LayoutParams.MATCH_PARENT);
-            if (i > 0) lp.setMarginStart(dp(4));
-            rb.setLayoutParams(lp);
-            rb.setBackgroundResource(R.drawable.segmented_option_bg);
-            rb.setButtonDrawable(null);
-            rb.setGravity(Gravity.CENTER);
-            rb.setText(String.valueOf(n));
-            rb.setTextSize(14f);
-            rb.setTypeface(null, Typeface.BOLD);
-            rb.setTextColor(getResources().getColorStateList(R.color.segmented_text, getTheme()));
-            rb.setOnClickListener(v -> {
-                if (resultCount == n) return;
-                resultCount = n;
-                // 选中项放大回落。三个 44dp 方块只靠背景色变化，
-                // 眼睛容易看不出到底换没换
-                Anim.segmentSelect(v);
-                updateCountHint();
-                saveScanSettings();
-            });
-            groupCount.addView(rb);
-        }
-        // 选中态统一在全部子项加完之后设，而且走 RadioGroup.check(id)
-        // 而不是 RadioButton.setChecked()。
-        //
-        // 上面已经补了 id，单靠 setChecked 也能工作；但 check() 是让
-        // RadioGroup 自己走一遍选中流程，mCheckedId 必然和界面一致，
-        // 不依赖「addView 会替我同步状态」这个实现细节。
-        for (int i = 0; i < groupCount.getChildCount(); i++) {
-            View child = groupCount.getChildAt(i);
-            if (child instanceof RadioButton && i < counts.size()
-                    && counts.get(i) == resultCount) {
-                groupCount.check(child.getId());
-                break;
-            }
-        }
+        segCount.setOnSelectListener(i -> {
+            resultCount = countOptions.get(i);
+            updateCountHint();
+            saveScanSettings();
+        });
         updateCountHint();
     }
 
@@ -670,7 +630,7 @@ public class MainActivity extends AppCompatActivity {
     private void startScan() {
         if (isRunning.get()) return;
 
-        final boolean v4 = radioIPv4.isChecked();
+        final boolean v4 = segIPVersion.getSelectedIndex() == 0;
         final boolean useTLS = checkTLS.isChecked();
         final int bandwidth = normalizeBandwidthInput();
         final String ports = collectPorts();
@@ -962,8 +922,9 @@ public class MainActivity extends AppCompatActivity {
         resultCount = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
                 .getInt(PREFS_RESULT_COUNT, 1);
 
-        radioIPv4.setChecked(useIPv4);
-        radioIPv6.setChecked(!useIPv4);
+        // 静默设置：这是从 prefs 恢复初值，不该触发"用户选择了"的回调，
+        // 否则 onCreate 阶段就会往 prefs 回写一次
+        segIPVersion.setSelectedSilently(useIPv4 ? 0 : 1);
         checkTLS.setChecked(useTLS);
         editBandwidth.setText(String.valueOf(bandwidth <= 0 ? 1 : bandwidth));
 
@@ -1058,7 +1019,7 @@ public class MainActivity extends AppCompatActivity {
     private void saveScanSettings() {
         getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
                 .edit()
-                .putBoolean(PREFS_USE_IPV4, radioIPv4.isChecked())
+                .putBoolean(PREFS_USE_IPV4, segIPVersion.getSelectedIndex() == 0)
                 .putBoolean(PREFS_USE_TLS, checkTLS.isChecked())
                 .putInt(PREFS_BANDWIDTH, normalizeBandwidthInput())
                 .putString(PREFS_PORTS, collectPorts())

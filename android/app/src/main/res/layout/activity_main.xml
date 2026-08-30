@@ -480,44 +480,14 @@
                 android:textColor="@color/text_secondary"
                 android:textSize="13sp" />
 
-            <RadioGroup
-                android:id="@+id/groupIPVersion"
+            <!-- SegmentedBar：选中指示块从旧位置滑到新位置。
+                 RadioGroup 的选中反馈只能是背景瞬间替换 —— 指示块"消失在
+                 这里、出现在那里"，中间没有过程，怎么调时长都是"啪"一下。 -->
+            <com.cf.ip.SegmentedBar
+                android:id="@+id/segIPVersion"
                 android:layout_width="match_parent"
                 android:layout_height="48dp"
-                android:layout_marginTop="8dp"
-                android:background="@drawable/segmented_track_bg"
-                android:gravity="center_vertical"
-                android:orientation="horizontal"
-                android:padding="4dp">
-
-                <RadioButton
-                    android:id="@+id/radioIPv4"
-                    android:layout_width="0dp"
-                    android:layout_height="match_parent"
-                    android:layout_weight="1"
-                    android:background="@drawable/segmented_option_bg"
-                    android:button="@null"
-                    android:checked="true"
-                    android:gravity="center"
-                    android:text="IPv4"
-                    android:textColor="@color/segmented_text"
-                    android:textSize="15sp"
-                    android:textStyle="bold" />
-
-                <RadioButton
-                    android:id="@+id/radioIPv6"
-                    android:layout_width="0dp"
-                    android:layout_height="match_parent"
-                    android:layout_marginStart="4dp"
-                    android:layout_weight="1"
-                    android:background="@drawable/segmented_option_bg"
-                    android:button="@null"
-                    android:gravity="center"
-                    android:text="IPv6"
-                    android:textColor="@color/segmented_text"
-                    android:textSize="15sp"
-                    android:textStyle="bold" />
-            </RadioGroup>
+                android:layout_marginTop="8dp" />
 
             <!-- 期望带宽：标签和说明占左侧，输入框固定 104dp 靠右。
                  原来输入框独占整行 match_parent，而它只收 1~4 位数字，
@@ -627,14 +597,10 @@
                         android:textSize="11sp" />
                 </LinearLayout>
 
-                <RadioGroup
-                    android:id="@+id/groupCount"
+                <com.cf.ip.SegmentedBar
+                    android:id="@+id/segCount"
                     android:layout_width="wrap_content"
-                    android:layout_height="44dp"
-                    android:background="@drawable/segmented_track_bg"
-                    android:gravity="center_vertical"
-                    android:orientation="horizontal"
-                    android:padding="4dp" />
+                    android:layout_height="44dp" />
             </LinearLayout>
 
             <View
