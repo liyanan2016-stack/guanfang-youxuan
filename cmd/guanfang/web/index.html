@@ -148,6 +148,18 @@
       </div>
       <span class="hint sub" id="countHint">只要最快的一个</span>
     </div>
+    <!-- 测速时长：默认 5 秒会整段落在运营商「突发不限速」窗口里，
+         测出来比持续可用带宽高得多，于是「优选很快、实际用起来很慢」。
+         10/15 秒能跨过这个窗口。 -->
+    <div class="row">
+      <label class="lbl">测速时长</label>
+      <div class="seg" id="segSpeedSeconds">
+        <button data-s="5" class="on">5秒</button>
+        <button data-s="10">10秒</button>
+        <button data-s="15">15秒</button>
+      </div>
+      <span class="hint sub" id="speedSecondsHint">最快出结果；实际使用比优选结果慢很多时改 10 或 15 秒</span>
+    </div>
     <!-- 端口：原版只测 80/443，优选出的 IP 拿去接一个跑在 2053 的节点
          会报 closed pipe，因为验证的根本不是要用的那个端口 -->
     <div class="row col">
@@ -172,6 +184,12 @@
         <input type="text" id="sni" class="wide" placeholder="自定义 SNI / Host，例如 your.domain.com">
         <div class="hint sub">
           留空用 cloudflare.com。填你节点的域名可让结果更贴近实际；填错会导致全部测不通。
+        </div>
+        <input type="text" id="speedURL" class="wide" style="margin-top:8px"
+               placeholder="自定义测速地址，例如 your.domain.com/files/100mb.bin">
+        <div class="hint sub">
+          留空则用公共镜像站测速 —— 那测的是别人域名的速度，和你自己节点的实际速度可能差很远。
+          填你自己域名下的一个大文件（100MB 以上）才最准。必须带文件路径。
         </div>
       </div>
     </div>
@@ -200,6 +218,10 @@
       <div class="kv"><div class="k">往返延迟</div><div class="v" id="rLat">-</div></div>
       <div class="kv"><div class="k">数据中心</div><div class="v" id="rDC">-</div></div>
       <div class="kv"><div class="k">总用时</div><div class="v" id="rTime">-</div></div>
+      <!-- 测速配置必须回显：不知道「这个速度是拿什么地址、测了几秒得出的」，
+           「优选很快、实际很慢」这个问题就永远查不下去 -->
+      <div class="kv"><div class="k">测速时长</div><div class="v" id="rSpeedSecs">-</div></div>
+      <div class="kv"><div class="k">测速地址</div><div class="v" id="rSpeedTarget">-</div></div>
     </div>
     <div class="ipbox">
       <code id="rIP">-</code>
@@ -277,6 +299,27 @@ document.querySelectorAll('#segIP button').forEach(b=>{
     b.classList.add('on'); useV4 = b.dataset.v === '4';
   };
 });
+
+// 测速时长。默认 5 秒：与旧版本行为一致。
+//
+// 为什么要开放这个选项：中国移动等运营商的国际出口对新连接有「突发不限速」
+// 窗口，前几秒飞快、之后掉一个数量级。5 秒测速整段都落在窗口内，测出来比
+// 持续可用带宽高得多 —— 用户会看到「优选很快、实际用起来很慢」。
+let speedSeconds = 5;
+
+document.querySelectorAll('#segSpeedSeconds button').forEach(b=>{
+  b.onclick=()=>{
+    if(b.disabled) return;
+    document.querySelectorAll('#segSpeedSeconds button').forEach(x=>x.classList.remove('on'));
+    b.classList.add('on');
+    speedSeconds = parseInt(b.dataset.s, 10) || 5;
+    document.getElementById('speedSecondsHint').textContent =
+      speedSeconds <= 5
+        ? '最快出结果；实际使用比优选结果慢很多时改 10 或 15 秒'
+        : (speedSeconds+' 秒测速，跨过运营商前几秒的不限速窗口，结果更接近真实速度，扫描会变慢');
+  };
+});
+
 document.querySelectorAll('#segTLS button').forEach(b=>{
   b.onclick=()=>{
     if(b.disabled) return;
@@ -384,13 +427,14 @@ function setBusy(on, label){
   document.getElementById('btnClearCache').disabled = on;
   document.getElementById('btnCancel').disabled = !on;
   document.getElementById('btnScan').textContent = on ? (label || '扫描中…') : '开始扫描';
-  document.querySelectorAll('#segIP button,#segTLS button,#segCount button')
+  document.querySelectorAll('#segIP button,#segTLS button,#segCount button,#segSpeedSeconds button')
     .forEach(b=>b.disabled = on);
   document.getElementById('bw').disabled = on;
   // 扫描中锁掉筛选项：改了也不会生效，留着可点会误导
   document.querySelectorAll('#chipPorts button,#chipRegions button').forEach(b=>b.disabled = on);
   document.getElementById('countriesExtra').disabled = on;
   document.getElementById('sni').disabled = on;
+  document.getElementById('speedURL').disabled = on;
 }
 
 document.getElementById('btnScan').onclick = async ()=>{
@@ -405,6 +449,8 @@ document.getElementById('btnScan').onclick = async ()=>{
     body: JSON.stringify({
       v4: useV4, useTLS: useTLS, bandwidth: bw,
       count: wantCount,
+      speedSeconds: speedSeconds,
+      speedURL: document.getElementById('speedURL').value.trim(),
       ports: Array.from(selectedPorts).join(','),
       countries: collectCountries(),
       sni: document.getElementById('sni').value.trim()
@@ -506,6 +552,8 @@ function showResult(r){
   document.getElementById('rDC').textContent    =
     (r.dataCenter || '-') + (r.country ? ' ('+r.country+')' : '');
   document.getElementById('rTime').textContent  = r.elapsed ? r.elapsed+' 秒' : '-';
+  document.getElementById('rSpeedSecs').textContent = r.speedSeconds ? r.speedSeconds+' 秒' : '-';
+  document.getElementById('rSpeedTarget').textContent = r.speedTarget || '-';
   renderMore(r.results);
 }
 

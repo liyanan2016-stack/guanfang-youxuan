@@ -121,6 +121,10 @@ func handleScan(w http.ResponseWriter, r *http.Request) {
 		// Count 要输出几个结果（1/5/10）。缺省为 0，核心层会收敛成 1，
 		// 所以老版本前端不传这个字段也照样是旧行为。
 		Count int `json:"count"`
+		// SpeedSeconds 正式测速时长（5/10/15）。缺省 0 = 用默认 5 秒。
+		SpeedSeconds int `json:"speedSeconds"`
+		// SpeedURL 自定义测速地址。缺省空 = 用 url.txt 下发的公共地址。
+		SpeedURL string `json:"speedURL"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, map[string]string{"error": "参数解析失败: " + err.Error()})
@@ -143,7 +147,7 @@ func handleScan(w http.ResponseWriter, r *http.Request) {
 
 	go func() {
 		res := better.GetIPs(req.V4, req.UseTLS, req.Bandwidth, req.Ports, req.Countries, req.SNI,
-			req.Count)
+			req.Count, req.SpeedSeconds, req.SpeedURL)
 
 		stateMu.Lock()
 		lastResult = res

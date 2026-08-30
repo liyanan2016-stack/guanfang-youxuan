@@ -100,8 +100,38 @@ const speedTestMinSampleMs = 2000
 // 砍太狠会误杀。
 const speedTestGiveUpRatio = 0.4
 
-// speedTestFullBudget 正式测速的时间预算。
+// speedTestFullBudget 正式测速的时间预算（默认档）。
 const speedTestFullBudget = 5 * time.Second
+
+// allowedSpeedSeconds 正式测速时长可选档位（秒）。
+//
+// 为什么要能调：中国移动等运营商的国际出口对新连接有「突发不限速」窗口，
+// 前几秒跑得飞快、之后进入限速队列掉一个数量级。5 秒测速正好整段都在
+// 突发窗口里，测出来的数字比持续可用带宽高得多 —— 用户会看到「优选很快、
+// 实际用起来很慢」。10 / 15 秒能跨过这个窗口，测到的是持续速度。
+//
+// 只给三档而不是任意输入：这个值乘以候选数就是单轮测速时长，
+// 开放输入等于让用户自己踩「填 60 秒然后扫半小时」的坑。
+// 5  = 最快出结果（默认，与 v1.15 及以前行为一致）
+// 10 = 跨过多数运营商的突发窗口，推荐给「优选快、实用慢」的场景
+// 15 = 最接近长时间下载的真实速度，代价是明显变慢
+var allowedSpeedSeconds = []int{5, 10, 15}
+
+// normalizeSpeedSeconds 把任意输入收敛到 allowedSpeedSeconds 里的某一档。
+//
+// 取「不小于输入的最小档位」：用户填 8 时给 10（多测不亏，宁可慢也别测不准），
+// 而不是给 5。0 或负数表示没指定，用默认档。
+func normalizeSpeedSeconds(n int) int {
+	if n <= 0 {
+		return int(speedTestFullBudget / time.Second)
+	}
+	for _, c := range allowedSpeedSeconds {
+		if n <= c {
+			return c
+		}
+	}
+	return allowedSpeedSeconds[len(allowedSpeedSeconds)-1]
+}
 
 // speedTestProbeBudget 快速预筛的时间预算。
 //
@@ -160,6 +190,138 @@ const (
 	fallbackSpeedTestDomain = "cloudflaremirrors.com"
 	fallbackSpeedTestFile   = "oracle/OL9/u1/x86_64/OracleLinux-R9-U1-x86_64-dvd.iso"
 )
+
+// ----------------------- 自定义测速地址 -----------------------
+
+// userSpeedDomain / userSpeedFile 用户自己的测速地址，优先于 url.txt。
+//
+// 为什么需要：默认测速地址是 url.txt 给的公共镜像（当前是
+// cloudflaremirrors.com 上的 Oracle Linux ISO）。那是别人的域名，
+// 边缘缓存命中率、CF 账户等级、有没有回源全都和用户自己的节点无关 ——
+// 测出 25 MB/s 说的是那个镜像站的速度，不是用户节点的速度。
+// 用户填自己的域名+大文件后，测速走的就是「CF 边缘 → 回源到他的服务器」
+// 这条实际会用到的链路，数字才有意义。
+//
+// 只在扫描开始前由 cloudflareTest 设置一次，之后只读，与 speedTestDomain
+// 的并发约定一致。
+var (
+	userSpeedDomain string
+	userSpeedFile   string
+)
+
+// parseSpeedURL 解析用户填写的测速地址，返回 (域名, 文件路径)。
+//
+// 接受 "https://a.com/b/big.bin"、"a.com/b/big.bin" 两种写法。
+// 必须带路径：只填域名的话拼出来是首页 HTML，几十 KB 就读完了，
+// 测出来的是个毫无意义的小数字。
+func parseSpeedURL(raw string) (string, string, error) {
+	s := strings.TrimSpace(raw)
+	if s == "" {
+		return "", "", nil
+	}
+	s = strings.TrimPrefix(s, "https://")
+	s = strings.TrimPrefix(s, "http://")
+	s = strings.TrimLeft(s, "/")
+
+	parts := strings.SplitN(s, "/", 2)
+	if len(parts) != 2 || parts[0] == "" || strings.TrimSpace(parts[1]) == "" {
+		return "", "", fmt.Errorf("测速地址要带文件路径，例如 your.domain.com/files/100mb.bin")
+	}
+	domain := parts[0]
+	// 域名里不该有这些：填成 "http://a.com" 少个斜杠、或者粘进了
+	// 带端口/查询串的怪地址时，早点说清楚比测完全是 0 好
+	if strings.ContainsAny(domain, " :?#") {
+		return "", "", fmt.Errorf("测速域名格式不对：%q", domain)
+	}
+	return domain, strings.TrimSpace(parts[1]), nil
+}
+
+// speedTestTarget 返回本次测速实际使用的域名与文件路径。
+// 用户填了自定义地址就用他的，否则用 url.txt 下发的公共地址。
+func speedTestTarget() (string, string) {
+	if userSpeedDomain != "" && userSpeedFile != "" {
+		return userSpeedDomain, userSpeedFile
+	}
+	return speedTestDomain, speedTestFile
+}
+
+// speedDiag 累计测速失败原因，用于收尾时给出可操作的提示。
+//
+// 为什么需要：自定义测速地址填错（路径不存在、文件太小、域名没过 CF）时，
+// 每个候选的测速都会返回 0，用户只会看到「未找到可用 IP」——
+// 完全看不出是自己填错了地址。把状态码记下来，收尾时就能直说
+// 「测速地址返回 404」。
+type speedDiagnostics struct {
+	mu          sync.Mutex
+	attempts    int
+	statusFails int
+	lastStatus  int
+	tooSmall    int
+}
+
+var speedDiag speedDiagnostics
+
+func (d *speedDiagnostics) reset() {
+	d.mu.Lock()
+	// 逐字段清零，不能 *d = speedDiagnostics{} —— 那样会把一个零值 Mutex
+	// 盖到已加锁的 mu 上，紧接着的 Unlock 就是「unlock of unlocked mutex」panic。
+	d.attempts = 0
+	d.statusFails = 0
+	d.lastStatus = 0
+	d.tooSmall = 0
+	d.mu.Unlock()
+}
+
+func (d *speedDiagnostics) recordAttempt() {
+	d.mu.Lock()
+	d.attempts++
+	d.mu.Unlock()
+}
+
+func (d *speedDiagnostics) recordStatus(code int) {
+	d.mu.Lock()
+	d.statusFails++
+	d.lastStatus = code
+	d.mu.Unlock()
+}
+
+// recordTooSmall 记录「连上了、状态码也对，但内容小到测不出速度」。
+// 用户拿首页或一个几 KB 的文件当测速文件时就是这种情况。
+func (d *speedDiagnostics) recordTooSmall() {
+	d.mu.Lock()
+	d.tooSmall++
+	d.mu.Unlock()
+}
+
+// hint 返回一条面向用户的诊断提示，没有可说的就返回空串。
+func (d *speedDiagnostics) hint(custom bool) string {
+	d.mu.Lock()
+	attempts, statusFails, lastStatus, tooSmall := d.attempts, d.statusFails, d.lastStatus, d.tooSmall
+	d.mu.Unlock()
+
+	if attempts == 0 {
+		return ""
+	}
+	where := "测速地址"
+	if custom {
+		where = "你填的测速地址"
+	}
+	// 全都是状态码错误 = 地址本身有问题，不是 IP 的问题
+	if statusFails >= attempts {
+		return fmt.Sprintf("%s全部返回 HTTP %d，请检查路径是否正确、文件是否可公开下载", where, lastStatus)
+	}
+	if tooSmall >= attempts {
+		return fmt.Sprintf("%s的文件太小，测速期内就下载完了，请换一个 100MB 以上的大文件", where)
+	}
+	return ""
+}
+
+// speedTestMinBytes 认定「文件太小」的下限。
+//
+// 低于这个量说明整个下载在预算内就结束了，算出来的速度只反映
+// 一次突发，不代表持续带宽。64KB 是个宽松的下限：真正用来测速的
+// 文件都在几十 MB 以上，正常情况下预算内根本读不完。
+const speedTestMinBytes = 64 * 1024
 
 // ewmaAvgAge EWMA 的平均年龄参数，decay = 2/(age+1)。
 // 30 是 VividCortex/ewma 的默认值，CloudflareSpeedTest 用的就是它。
@@ -817,9 +979,9 @@ func testRTT(ip string, port int, useTLS bool, sni string) (int, int, string, fl
 	// 自己的事，状态码说明不了用户节点的任何情况。
 	userSNI := strings.TrimSpace(sni) != ""
 	if sni == "" {
-		// 优先用测速域名，让验证与测速指向同一个目标
-		if speedTestDomain != "" {
-			sni = speedTestDomain
+		// 优先用测速域名（含用户自定义的），让验证与测速指向同一个目标
+		if d, _ := speedTestTarget(); d != "" {
+			sni = d
 		} else {
 			sni = "cloudflare.com"
 		}
@@ -1235,6 +1397,10 @@ func runSpeedTestSimple(ip string, port int, useTLS bool, target int, budget tim
 	if budget <= 0 {
 		budget = speedTestFullBudget
 	}
+	// 测速目标：用户填了自定义地址就用他的，否则用 url.txt 下发的公共地址。
+	// 取一次存下来，避免 TLS SNI 和 URL 用的不是同一个域名。
+	testDomain, testFile := speedTestTarget()
+	speedDiag.recordAttempt()
 	var tcpMs int
 	transport := &http.Transport{
 		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
@@ -1247,7 +1413,7 @@ func runSpeedTestSimple(ip string, port int, useTLS bool, target int, budget tim
 		},
 	}
 	if useTLS {
-		transport.TLSClientConfig = &tls.Config{ServerName: speedTestDomain}
+		transport.TLSClientConfig = &tls.Config{ServerName: testDomain}
 	}
 	client := &http.Client{
 		Transport: transport,
@@ -1260,7 +1426,7 @@ func runSpeedTestSimple(ip string, port int, useTLS bool, target int, budget tim
 	if useTLS {
 		scheme = "https"
 	}
-	testURL := fmt.Sprintf("%s://%s/%s", scheme, speedTestDomain, speedTestFile)
+	testURL := fmt.Sprintf("%s://%s/%s", scheme, testDomain, testFile)
 
 	req, _ := http.NewRequestWithContext(scanCtx(), "GET", testURL, nil)
 	resp, err := client.Do(req)
@@ -1275,6 +1441,7 @@ func runSpeedTestSimple(ip string, port int, useTLS bool, target int, budget tim
 	//
 	// 206 也接受：有些镜像站对大文件一直按 Range 回。
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusPartialContent {
+		speedDiag.recordStatus(resp.StatusCode)
 		return 0, 0, ""
 	}
 
@@ -1351,6 +1518,12 @@ func runSpeedTestSimple(ip string, port int, useTLS bool, target int, budget tim
 		return 0, tcpMs, dataCenter
 	}
 
+	// 内容小到预算内就下完了：算出来的速度只反映一次突发。记一笔诊断，
+	// 好在收尾时告诉用户「换个大文件」，而不是让他对着一堆 0 猜原因。
+	if totalBytes < speedTestMinBytes {
+		speedDiag.recordTooSmall()
+	}
+
 	speedKB := int(e.rate() / 1024)
 
 	// EWMA 在样本极少时（下载几乎瞬间结束）可能失真，
@@ -1406,10 +1579,16 @@ func lookupDataCenter(colo string) string {
 // 改成「池里达标的数量够了才收工」。
 //
 // 返回本轮实测最快的那个（供进度文案用）和是否被取消。
+//
+// fullBudget 是正式测速的时间预算，由用户选择的测速时长决定（见
+// allowedSpeedSeconds）。预筛预算固定不变：它只用来排序，拉长没有收益。
 func speedTestRound(cands []RTTResult, useTLS bool, target int, wantCount int,
-	pool *resultPool) (testOutcome, bool) {
+	pool *resultPool, fullBudget time.Duration) (testOutcome, bool) {
 	if len(cands) == 0 {
 		return testOutcome{}, false
+	}
+	if fullBudget <= 0 {
+		fullBudget = speedTestFullBudget
 	}
 
 	wantFinalists := finalistCount(wantCount)
@@ -1477,7 +1656,7 @@ func speedTestRound(cands []RTTResult, useTLS bool, target int, wantCount int,
 		// 用 RTT 阶段测通的那个端口测速，不能回落到 80/443 ——
 		// 否则测的是另一个端口的速度，结果对不上用户实际要用的端口。
 		// 传入 target 让明显达不到目标的 IP 能提前放弃，不必占满预算。
-		maxSpeed, tcpMs, dc := runSpeedTestSimple(r.IP, r.Port, useTLS, target, speedTestFullBudget)
+		maxSpeed, tcpMs, dc := runSpeedTestSimple(r.IP, r.Port, useTLS, target, fullBudget)
 		// 测速响应也带 CF-RAY，但以 RTT 阶段拿到的 colo 为准：
 		// 地区筛选是基于它做的，两处不一致会让结果自相矛盾
 		if dc == "" {
@@ -1583,6 +1762,20 @@ type testOutcome struct {
 	PoolExhausted bool // true = 全部子网已测完（而非轮次用尽）
 	BelowTarget   bool // true = 有结果但未达到期望带宽
 
+	// SpeedHint 测速层面的诊断提示（测速地址全部 404、文件太小等）。
+	//
+	// 单独一个字段而不是塞进 Error：这条提示说的是「你的测速地址配错了」，
+	// 和「没找到达标 IP」是两回事，界面要能同时说清两件事。
+	SpeedHint string
+
+	// SpeedSeconds 本次实际生效的测速时长（秒）。
+	// 界面填 8 会被收敛成 10，得让用户看到真实值。
+	SpeedSeconds int
+
+	// SpeedTarget 本次实际使用的测速地址（域名/路径），用户填错时
+	// 光看「未找到」猜不出原因，把用了什么地址回显出来最省事。
+	SpeedTarget string
+
 	// Results 按速度降序的全部结果（含 IP/Port/MaxSpeed 等字段）。
 	//
 	// 用户要 5 或 10 个结果时，第一个和 IP/Port/MaxSpeed 那几个顶层字段
@@ -1592,10 +1785,32 @@ type testOutcome struct {
 }
 
 // cloudflareTest 核心测试逻辑
+//
+// speedSeconds 是正式测速的时长（秒），收敛到 allowedSpeedSeconds 里的档位。
+// customSpeedURL 是用户自定义测速地址，空则用 url.txt 下发的公共地址。
 func cloudflareTest(ipType int, useTLS bool, taskNum int, speed int, filter scanFilter, sni string,
-	wantCount int) testOutcome {
+	wantCount int, speedSeconds int, customSpeedURL string) testOutcome {
 	wantCount = normalizeResultCount(wantCount)
+	fullBudget := time.Duration(normalizeSpeedSeconds(speedSeconds)) * time.Second
 	pool := newResultPool(wantCount)
+	speedDiag.reset()
+
+	// 自定义测速地址要在 initLocations 之前落地：downloadAllData 会写
+	// speedTestDomain/speedTestFile，而 testRTT 的默认 SNI 取自
+	// speedTestTarget() —— 先设好才能保证「验证的域名」和「测速的域名」
+	// 从第一次探测起就是同一个。
+	userSpeedDomain, userSpeedFile = "", ""
+	if strings.TrimSpace(customSpeedURL) != "" {
+		d, f, err := parseSpeedURL(customSpeedURL)
+		if err != nil {
+			// 填错了就直接停，不要拿默认地址悄悄跑完 —— 那样用户会以为
+			// 测的是自己的域名，拿到一个和实际使用无关的速度。
+			setProgress("测速地址无效：" + err.Error())
+			return testOutcome{SpeedHint: err.Error()}
+		}
+		userSpeedDomain, userSpeedFile = d, f
+	}
+
 	initLocations()
 	markScanStart()
 	if isCancelled() {
@@ -1726,7 +1941,7 @@ func cloudflareTest(ipType int, useTLS bool, taskNum int, speed int, filter scan
 		// 原版遇到第一个达标的就返回，但默认目标是 1 Mbps —— 几乎人人达标，
 		// 于是"优选"退化成"延迟最低"。延迟低不代表带宽高：同城机房延迟 20ms
 		// 却可能已被打满，300ms 的远端反而跑得开。
-		roundBest, cancelled := speedTestRound(rttResults, useTLS, speed, wantCount, pool)
+		roundBest, cancelled := speedTestRound(rttResults, useTLS, speed, wantCount, pool, fullBudget)
 		if cancelled {
 			setProgress("扫描已取消")
 			return testOutcome{}
@@ -1747,6 +1962,7 @@ func cloudflareTest(ipType int, useTLS bool, taskNum int, speed int, filter scan
 			out.RoundsRun = round
 			out.Tested = sampler.used()
 			out.PoolSize = sampler.total()
+			annotateSpeedInfo(&out, fullBudget)
 			return out
 		}
 		// 子网刚好取完，没有下一批可测，不必再走剩下的轮次
@@ -1782,7 +1998,23 @@ func cloudflareTest(ipType int, useTLS bool, taskNum int, speed int, filter scan
 				roundsRun, best.IP, best.Port, best.MaxSpeed))
 		}
 	}
+	annotateSpeedInfo(&best, fullBudget)
 	return best
+}
+
+// annotateSpeedInfo 把测速配置与诊断信息填进结果。
+//
+// 单独一个函数是因为 cloudflareTest 有两条返回路径（达标提前返回、
+// 轮次用尽兜底返回），漏填一条就会出现「有时有提示、有时没有」。
+func annotateSpeedInfo(out *testOutcome, fullBudget time.Duration) {
+	out.SpeedSeconds = int(fullBudget / time.Second)
+	d, f := speedTestTarget()
+	if d != "" {
+		out.SpeedTarget = d + "/" + f
+	}
+	if out.SpeedHint == "" {
+		out.SpeedHint = speedDiag.hint(userSpeedDomain != "")
+	}
 }
 
 // ----------------------- 多结果输出 -----------------------

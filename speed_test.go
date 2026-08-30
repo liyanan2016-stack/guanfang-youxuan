@@ -21,12 +21,18 @@ import (
 // withTestSpeedURL 固定测速域名与文件路径。
 // runSpeedTestSimple 拼接的 testURL 是 "%s://%s/%s"，真实运行由
 // downloadAllData 从 url.txt 读入；测试环境是空的，必须显式设置。
+//
+// 同时清掉自定义测速地址：speedTestTarget() 优先返回用户地址，
+// 上一个用例留下的自定义值会让这里的设置失效。
 func withTestSpeedURL(t *testing.T, domain, file string) {
 	t.Helper()
 	oldDomain, oldFile := speedTestDomain, speedTestFile
+	oldUserDomain, oldUserFile := userSpeedDomain, userSpeedFile
 	speedTestDomain, speedTestFile = domain, file
+	userSpeedDomain, userSpeedFile = "", ""
 	t.Cleanup(func() {
 		speedTestDomain, speedTestFile = oldDomain, oldFile
+		userSpeedDomain, userSpeedFile = oldUserDomain, oldUserFile
 	})
 }
 
@@ -62,6 +68,37 @@ func speedTestServer(t *testing.T, status int, body string, sleepPerChunk time.D
 	}))
 	t.Cleanup(srv.Close)
 	return srv
+}
+
+// speedTestServerRecordingPaths 同 speedTestServer，另外记下收到的请求路径。
+// 用来验证测速真的打在自定义地址上，而不是公共地址。
+func speedTestServerRecordingPaths(t *testing.T, status int, body string,
+	sleepPerChunk time.Duration) (*httptest.Server, func() []string) {
+	t.Helper()
+	var mu sync.Mutex
+	var paths []string
+	chunks := splitChunks(body, 64*1024)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		paths = append(paths, r.URL.Path)
+		mu.Unlock()
+		w.Header().Set("CF-RAY", "abc123def456-HKG")
+		w.WriteHeader(status)
+		flusher, _ := w.(http.Flusher)
+		for _, c := range chunks {
+			w.Write(c)
+			if flusher != nil {
+				flusher.Flush()
+			}
+			time.Sleep(sleepPerChunk)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	return srv, func() []string {
+		mu.Lock()
+		defer mu.Unlock()
+		return append([]string(nil), paths...)
+	}
 }
 
 func splitChunks(s string, size int) [][]byte {

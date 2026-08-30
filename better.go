@@ -50,6 +50,18 @@ type ScanResult struct {
 	// FoundCount 实际达标的结果个数。要 5 个只凑到 3 个时，
 	// 界面得能说清「找到 3 个」而不是假装有 5 个。
 	FoundCount int `json:"foundCount"`
+
+	// SpeedSeconds 本次实际生效的测速时长（秒）。界面填 8 会被收敛成 10，
+	// 回传是为了让用户看到真实值。
+	SpeedSeconds int `json:"speedSeconds"`
+	// SpeedTarget 本次实际使用的测速地址（域名/路径）。
+	//
+	// 必须回显：用户不知道速度数字是拿什么测出来的时候，
+	// 「优选很快、实际很慢」这个问题就永远排查不下去。
+	SpeedTarget string `json:"speedTarget"`
+	// SpeedHint 测速层面的诊断提示（地址全部 404、文件太小等）。
+	// 和 Error 分开：这条说的是「测速地址配错了」，不是「没找到 IP」。
+	SpeedHint string `json:"speedHint"`
 }
 
 // ScanItem 单条优选结果。字段与 ScanResult 的顶层同名字段一致。
@@ -70,10 +82,15 @@ type ScanItem struct {
 // 就会出现「界面能选、核心层不认」的档位。
 func ResultCounts() string { return joinInts(allowedResultCounts) }
 
+// SpeedSeconds 返回允许的测速时长档位 CSV（如 "5,10,15"），供界面构建选项。
+//
+// 同 ResultCounts：档位定义只留核心层一份。
+func SpeedSeconds() string { return joinInts(allowedSpeedSeconds) }
+
 // Version 返回核心层版本号，供界面显示
 func Version() string { return libVersion }
 
-const libVersion = "1.16"
+const libVersion = "1.17"
 
 // HTTPPorts 返回明文模式可选端口的 CSV，供界面构建选项
 func HTTPPorts() string { return joinInts(cfHTTPPorts) }
@@ -203,10 +220,21 @@ func enterTask() {
 // countries: 允许的落地国家代码 CSV（如 "HK,JP"），空则不限
 // sni: 自定义 SNI/Host，空则用 cloudflare.com
 // wantCount: 要输出几个结果，收敛到 1/5/10 之一（见 ResultCounts）。
+// speedSeconds: 正式测速时长（秒），收敛到 5/10/15 之一（见 SpeedSeconds），0 用默认 5。
+// speedURL: 自定义测速地址（如 "your.domain.com/files/100mb.bin"），空则用公共地址。
 //
 // 关于 wantCount —— 它直接决定扫描时长：每个结果都要占一次完整测速预算
 // （speedTestFullBudget），要 10 个就意味着单轮测速时间翻几倍。所以只开放
 // 三档而不是任意数字，避免用户填个 50 然后等十分钟以为程序卡死。
+//
+// 关于 speedSeconds —— 移动等运营商的国际出口对新连接有「突发不限速」窗口，
+// 5 秒测速整段都落在窗口内，测出来比持续可用带宽高得多，于是「优选很快、
+// 实际使用很慢」。拉到 10/15 秒能跨过窗口，代价是扫描明显变长。
+//
+// 关于 speedURL —— 默认测速地址是 url.txt 下发的公共镜像，那是别人的域名，
+// 缓存命中率、CF 账户等级、有没有回源都和用户自己的节点无关。填自己的域名
+// 才能测到「CF 边缘 → 回源到我的服务器」这条实际会用的链路。填了它，RTT
+// 阶段默认 SNI 也会跟着走同一个域名（除非另外指定 sni）。
 //
 // 关于 countries —— 和反代优选有本质区别：反代节点列表自带国家标签，
 // 可以先筛后测；官方 IP 的落地机房取决于运营商线路，同一个 IP 在
@@ -216,7 +244,7 @@ func enterTask() {
 // 阻塞调用，需在后台线程执行。
 // 界面派发到后台线程之前应先调 BeginTask()，否则这段窗口里的取消会丢。
 func GetIPs(v4 bool, useTLS bool, bandwidth int, ports string, countries string, sni string,
-	wantCount int) string {
+	wantCount int, speedSeconds int, speedURL string) string {
 	enterTask()
 	wantCount = normalizeResultCount(wantCount)
 	setProgress("正在初始化...")
@@ -246,7 +274,7 @@ func GetIPs(v4 bool, useTLS bool, bandwidth int, ports string, countries string,
 	startTime := timeNow()
 
 	out := cloudflareTest(ipType, useTLS, defaultTaskNum, speedTarget, filter, strings.TrimSpace(sni),
-		wantCount)
+		wantCount, speedSeconds, speedURL)
 
 	realBandwidth := out.MaxSpeed / 128
 	elapsed := int(timeSince(startTime).Seconds())
@@ -262,6 +290,9 @@ func GetIPs(v4 bool, useTLS bool, bandwidth int, ports string, countries string,
 		Country:       out.Country,
 		Elapsed:       elapsed,
 		WantCount:     wantCount,
+		SpeedSeconds:  out.SpeedSeconds,
+		SpeedTarget:   out.SpeedTarget,
+		SpeedHint:     out.SpeedHint,
 	}
 	if out.IP != "" && out.Port > 0 {
 		result.Address = net.JoinHostPort(out.IP, strconv.Itoa(out.Port))
@@ -349,6 +380,16 @@ func GetIPs(v4 bool, useTLS bool, bandwidth int, ports string, countries string,
 			setProgress(fmt.Sprintf("扫描完成，找到 %d 个，用时 %d 秒", result.FoundCount, elapsed))
 		} else {
 			setProgress(fmt.Sprintf("扫描完成，用时 %d 秒", elapsed))
+		}
+	}
+
+	// 测速诊断挂在 Error 末尾。放这里而不是各分支里：测速地址配错时
+	// 「没找到 IP」和「未达标」两条路径都会走到，逐个分支写会漏。
+	if result.SpeedHint != "" {
+		if result.Error == "" {
+			result.Error = result.SpeedHint
+		} else {
+			result.Error += "。" + result.SpeedHint
 		}
 	}
 

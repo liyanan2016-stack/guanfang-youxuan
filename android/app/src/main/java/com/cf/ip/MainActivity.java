@@ -47,6 +47,14 @@ public class MainActivity extends AppCompatActivity {
     private int resultCount = 1;
     /** 档位列表，下标与 segCount 的格子一一对应 */
     private java.util.List<Integer> countOptions = new java.util.ArrayList<>();
+
+    private SegmentedBar segSpeedSeconds;
+    private TextView txtSpeedSecondsHint;
+    /** 当前选中的测速时长（秒），档位由核心层 Better.speedSeconds() 给出 */
+    private int speedSeconds = 5;
+    /** 档位列表，下标与 segSpeedSeconds 的格子一一对应 */
+    private java.util.List<Integer> speedSecondOptions = new java.util.ArrayList<>();
+    private EditText editSpeedURL;
     private Switch checkTLS;
     private EditText editBandwidth;
     private EditText editCountries;
@@ -116,6 +124,8 @@ public class MainActivity extends AppCompatActivity {
     private static final String PREFS_COUNTRIES_EXTRA = "countries_extra";
     private static final String PREFS_SNI = "sni";
     private static final String PREFS_RESULT_COUNT = "result_count";
+    private static final String PREFS_SPEED_SECONDS = "speed_seconds";
+    private static final String PREFS_SPEED_URL = "speed_url";
     // 折叠状态也要记：改过端口的人下次多半还想看到它
     private static final String PREFS_PORTS_OPEN = "ports_open";
     private static final String PREFS_REGIONS_OPEN = "regions_open";
@@ -151,6 +161,9 @@ public class MainActivity extends AppCompatActivity {
         // 等宽：IPv4/IPv6 标签长度相同，等宽最整齐
         segIPVersion.setItems(new String[]{"IPv4", "IPv6"}, true);
         txtCountHint = findViewById(R.id.txtCountHint);
+        segSpeedSeconds = findViewById(R.id.segSpeedSeconds);
+        txtSpeedSecondsHint = findViewById(R.id.txtSpeedSecondsHint);
+        editSpeedURL = findViewById(R.id.editSpeedURL);
         checkTLS = findViewById(R.id.checkTLS);
         editBandwidth = findViewById(R.id.editBandwidth);
         editCountries = findViewById(R.id.editCountries);
@@ -280,6 +293,7 @@ public class MainActivity extends AppCompatActivity {
         rebuildPortChips();
 
         buildCountOptions();
+        buildSpeedSecondOptions();
         setupCollapsibles();
 
         renderHistory();
@@ -320,16 +334,7 @@ public class MainActivity extends AppCompatActivity {
      * 单选控件只会让人怀疑它们行为不同。
      */
     private void buildCountOptions() {
-        String csv = Better.resultCounts();
-        java.util.List<Integer> counts = new java.util.ArrayList<>();
-        for (String part : csv.split(",")) {
-            part = part.trim();
-            if (part.isEmpty()) continue;
-            try {
-                counts.add(Integer.parseInt(part));
-            } catch (NumberFormatException ignored) {
-            }
-        }
+        java.util.List<Integer> counts = parseIntCsv(Better.resultCounts());
         // 核心层没给出档位时兜一个最小可用集，界面不能变成空白
         if (counts.isEmpty()) {
             counts.add(1);
@@ -373,6 +378,77 @@ public class MainActivity extends AppCompatActivity {
         } else {
             txtCountHint.setText("输出最快的 " + resultCount + " 个，耗时明显增加");
         }
+    }
+
+    /**
+     * 按核心层给的档位构建测速时长选项。
+     *
+     * <p>档位来自 {@link Better#speedSeconds()}（"5,10,15"），同 buildCountOptions
+     * 一样不在界面里硬编码。
+     *
+     * <p>为什么要开放这个选项：中国移动等运营商的国际出口对新连接有
+     * 「突发不限速」窗口，前几秒跑得飞快、之后掉一个数量级。5 秒测速整段
+     * 都落在窗口内，测出来的数字比持续可用带宽高得多 —— 用户会看到
+     * 「优选出来很快、实际用起来很慢」。10/15 秒能跨过这个窗口。
+     */
+    private void buildSpeedSecondOptions() {
+        java.util.List<Integer> secs = parseIntCsv(Better.speedSeconds());
+        // 核心层没给出档位时兜一个最小可用集，界面不能变成空白
+        if (secs.isEmpty()) {
+            secs.add(5);
+        }
+        speedSecondOptions = secs;
+
+        String[] labels = new String[secs.size()];
+        for (int i = 0; i < secs.size(); i++) {
+            labels[i] = secs.get(i) + "秒";
+        }
+        segSpeedSeconds.setItems(labels, false);
+
+        int index = secs.indexOf(speedSeconds);
+        if (index < 0) {
+            index = 0;
+            speedSeconds = secs.get(0);
+        }
+        // 静默：这是恢复初值，不该触发回调往 prefs 回写
+        segSpeedSeconds.setSelectedSilently(index);
+
+        segSpeedSeconds.setOnSelectListener(i -> {
+            speedSeconds = speedSecondOptions.get(i);
+            updateSpeedSecondsHint();
+            saveScanSettings();
+        });
+        updateSpeedSecondsHint();
+    }
+
+    /**
+     * 测速时长的说明文字。
+     *
+     * <p>必须点出「优选快、实际慢」这个症状：这是用户唯一能自己识别的信号，
+     * 不说明的话没人知道该动这个选项。
+     */
+    private void updateSpeedSecondsHint() {
+        if (txtSpeedSecondsHint == null) return;
+        if (speedSeconds <= 5) {
+            txtSpeedSecondsHint.setText("5 秒最快出结果；实际使用比优选结果慢很多时改 10 或 15 秒");
+        } else {
+            txtSpeedSecondsHint.setText(speedSeconds + " 秒测速，能跨过运营商前几秒的不限速窗口，结果更接近长时间下载的真实速度，扫描会变慢");
+        }
+    }
+
+    /** 解析核心层给的档位 CSV（如 "5,10,15"），忽略空项和非数字。 */
+    private java.util.List<Integer> parseIntCsv(String csv) {
+        java.util.List<Integer> out = new java.util.ArrayList<>();
+        if (csv == null) return out;
+        for (String part : csv.split(",")) {
+            part = part.trim();
+            if (part.isEmpty()) continue;
+            try {
+                out.add(Integer.parseInt(part));
+            } catch (NumberFormatException ignored) {
+            }
+        }
+        return out;
     }
 
     /**
@@ -637,6 +713,8 @@ public class MainActivity extends AppCompatActivity {
         final String countries = collectCountries();
         final String sni = editSNI.getText().toString().trim();
         final int count = resultCount;
+        final int speedSecs = speedSeconds;
+        final String speedURL = editSpeedURL.getText().toString().trim();
         editBandwidth.clearFocus();
         hideKeyboard(editBandwidth);
         saveScanSettings();
@@ -661,7 +739,8 @@ public class MainActivity extends AppCompatActivity {
 
         executor.execute(() -> {
             try {
-                String resultJson = Better.getIPs(v4, useTLS, bandwidth, ports, countries, sni, count);
+                String resultJson = Better.getIPs(v4, useTLS, bandwidth, ports, countries, sni, count,
+                        speedSecs, speedURL);
                 mainHandler.post(() -> onScanResult(resultJson));
             } catch (Exception e) {
                 mainHandler.post(() -> showResult("扫描出错: " + e.getMessage()));
@@ -710,7 +789,6 @@ public class MainActivity extends AppCompatActivity {
             String ip = json.optString("ip", "");
             String error = json.optString("error", "");
             boolean cancelled = json.optBoolean("cancelled", false);
-            boolean belowTarget = json.optBoolean("belowTarget", false);
 
             // 用户主动取消：不能显示成"未找到"，那是误导
             if (cancelled) {
@@ -738,6 +816,10 @@ public class MainActivity extends AppCompatActivity {
             String address = json.optString("address", "");
             if (address.isEmpty()) address = ip;
             int elapsed = json.optInt("elapsed", 0);
+            // 测速配置也要回显：不知道「这个速度是拿什么地址、测了几秒得出的」，
+            // 「优选很快、实际很慢」这个问题就永远查不下去
+            int speedSecs = json.optInt("speedSeconds", 0);
+            String speedTarget = json.optString("speedTarget", "");
             String scanTime = formatNow();
 
             // 复制的必须是带端口的完整地址：只给 IP 就是原来那个
@@ -752,15 +834,18 @@ public class MainActivity extends AppCompatActivity {
                     + "往返延迟: " + latencyMs + " ms\n"
                     + "数据中心: " + displayValue(dataCenter)
                     + (country.isEmpty() ? "" : " (" + country + ")") + "\n"
-                    + "总计用时: " + elapsed + " 秒";
+                    + "总计用时: " + elapsed + " 秒"
+                    + (speedSecs > 0 ? "\n测速时长: " + speedSecs + " 秒" : "")
+                    + (speedTarget.isEmpty() ? "" : "\n测速地址: " + speedTarget);
 
             showStructuredResult(address, bandwidth, realBandwidth, maxSpeed, latencyMs,
                     dataCenter, country, elapsed);
             renderMoreResults(json.optJSONArray("results"));
 
-            // 未达标时结果和说明同时给出：IP 仍然可用，
-            // 但要让用户知道没到他要的带宽
-            if (belowTarget && !error.isEmpty()) {
+            // 有结果时也可能有话要说：未达标（IP 仍可用但没到期望带宽）、
+            // 测速地址全部 404、测速文件太小等。这些都会影响用户怎么看
+            // 这个速度数字，不能因为「拿到 IP 了」就吞掉。
+            if (!error.isEmpty()) {
                 showNotice(error);
             }
 
@@ -921,6 +1006,9 @@ public class MainActivity extends AppCompatActivity {
         // 默认 1：多数人只要一个最快的，而多要几个会明显变慢
         resultCount = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
                 .getInt(PREFS_RESULT_COUNT, 1);
+        // 默认 5 秒：与 v1.15 及以前行为一致，不给老用户改变默认结果
+        speedSeconds = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+                .getInt(PREFS_SPEED_SECONDS, 5);
 
         // 静默设置：这是从 prefs 恢复初值，不该触发"用户选择了"的回调，
         // 否则 onCreate 阶段就会往 prefs 回写一次
@@ -956,6 +1044,9 @@ public class MainActivity extends AppCompatActivity {
         // 节点域名不再折叠，直接回填即可
         editSNI.setText(getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
                 .getString(PREFS_SNI, ""));
+        // 自定义测速地址同理：填过一次的人下次还想用同一个文件
+        editSpeedURL.setText(getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+                .getString(PREFS_SPEED_URL, ""));
     }
 
     /**
@@ -1027,6 +1118,8 @@ public class MainActivity extends AppCompatActivity {
                 .putString(PREFS_COUNTRIES_EXTRA, editCountries.getText().toString().trim())
                 .putString(PREFS_SNI, editSNI.getText().toString().trim())
                 .putInt(PREFS_RESULT_COUNT, resultCount)
+                .putInt(PREFS_SPEED_SECONDS, speedSeconds)
+                .putString(PREFS_SPEED_URL, editSpeedURL.getText().toString().trim())
                 .apply();
     }
 

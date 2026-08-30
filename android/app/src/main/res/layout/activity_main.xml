@@ -603,6 +603,47 @@
                     android:layout_height="44dp" />
             </LinearLayout>
 
+            <!-- 测速时长。默认 5 秒会整段落在运营商「突发不限速」窗口里，
+                 测出来比持续可用带宽高得多，于是「优选很快、实际用起来很慢」。
+                 拉到 10/15 秒能跨过这个窗口。 -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="16dp"
+                android:baselineAligned="false"
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
+
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_marginEnd="12dp"
+                    android:layout_weight="1"
+                    android:orientation="vertical">
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="测速时长"
+                        android:textColor="@color/text_secondary"
+                        android:textSize="13sp" />
+
+                    <TextView
+                        android:id="@+id/txtSpeedSecondsHint"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="3dp"
+                        android:text="5 秒最快出结果；实际使用比优选结果慢很多时改 10 或 15 秒"
+                        android:textColor="@color/text_muted"
+                        android:textSize="11sp" />
+                </LinearLayout>
+
+                <com.cf.ip.SegmentedBar
+                    android:id="@+id/segSpeedSeconds"
+                    android:layout_width="wrap_content"
+                    android:layout_height="44dp" />
+            </LinearLayout>
+
             <View
                 android:layout_width="match_parent"
                 android:layout_height="1dp"
@@ -843,6 +884,57 @@
                     android:layout_height="match_parent"
                     android:background="@android:color/transparent"
                     android:hint="例如 your.domain.com"
+                    android:imeOptions="actionDone"
+                    android:importantForAutofill="no"
+                    android:inputType="textUri"
+                    android:padding="0dp"
+                    android:singleLine="true"
+                    android:textColor="@color/text_primary"
+                    android:textColorHint="@color/text_secondary"
+                    android:textSize="14sp" />
+            </LinearLayout>
+
+            <!-- 自定义测速地址。不填时测的是公共镜像站（别人的域名），
+                 那个速度和「CF 边缘回源到你的服务器」这条实际链路无关 ——
+                 这正是「优选很快、实际很慢」最常见的原因。 -->
+            <View
+                android:layout_width="match_parent"
+                android:layout_height="1dp"
+                android:layout_marginTop="14dp"
+                android:background="@color/glass_hairline" />
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="14dp"
+                android:text="自定义测速地址（选填）"
+                android:textColor="@color/text_primary"
+                android:textSize="13sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="3dp"
+                android:text="留空则用公共镜像站测速，那测的是别人域名的速度，和你自己节点的实际速度可能差很远。填你自己域名下的一个大文件（100MB 以上）才最准。必须带文件路径。"
+                android:textColor="@color/text_secondary"
+                android:textSize="11sp" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="44dp"
+                android:layout_marginTop="8dp"
+                android:background="@drawable/glass_input"
+                android:gravity="center_vertical"
+                android:orientation="horizontal"
+                android:paddingHorizontal="10dp">
+
+                <EditText
+                    android:id="@+id/editSpeedURL"
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent"
+                    android:background="@android:color/transparent"
+                    android:hint="例如 your.domain.com/files/100mb.bin"
                     android:imeOptions="actionDone"
                     android:importantForAutofill="no"
                     android:inputType="textUri"
