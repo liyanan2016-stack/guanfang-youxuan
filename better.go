@@ -90,7 +90,7 @@ func SpeedSeconds() string { return joinInts(allowedSpeedSeconds) }
 // Version 返回核心层版本号，供界面显示
 func Version() string { return libVersion }
 
-const libVersion = "1.17"
+const libVersion = "1.18"
 
 // HTTPPorts 返回明文模式可选端口的 CSV，供界面构建选项
 func HTTPPorts() string { return joinInts(cfHTTPPorts) }

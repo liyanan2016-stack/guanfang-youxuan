@@ -71,6 +71,11 @@ public class MainActivity extends AppCompatActivity {
     private View boxRegions;
     private View arrowRegions;
     private TextView txtRegionsSummary;
+
+    private View headerAdvanced;
+    private View boxAdvanced;
+    private View arrowAdvanced;
+    private TextView txtAdvancedSummary;
     private Button btnScan;
     private Button btnCancel;
     private Button btnUpdate;
@@ -129,6 +134,7 @@ public class MainActivity extends AppCompatActivity {
     // 折叠状态也要记：改过端口的人下次多半还想看到它
     private static final String PREFS_PORTS_OPEN = "ports_open";
     private static final String PREFS_REGIONS_OPEN = "regions_open";
+    private static final String PREFS_ADVANCED_OPEN = "advanced_open";
     private static final int MAX_HISTORY = 10;
 
     /**
@@ -179,6 +185,10 @@ public class MainActivity extends AppCompatActivity {
         boxRegions = findViewById(R.id.boxRegions);
         arrowRegions = findViewById(R.id.arrowRegions);
         txtRegionsSummary = findViewById(R.id.txtRegionsSummary);
+        headerAdvanced = findViewById(R.id.headerAdvanced);
+        boxAdvanced = findViewById(R.id.boxAdvanced);
+        arrowAdvanced = findViewById(R.id.arrowAdvanced);
+        txtAdvancedSummary = findViewById(R.id.txtAdvancedSummary);
         btnScan = findViewById(R.id.btnScan);
         btnCancel = findViewById(R.id.btnCancel);
         btnUpdate = findViewById(R.id.btnUpdate);
@@ -416,6 +426,7 @@ public class MainActivity extends AppCompatActivity {
         segSpeedSeconds.setOnSelectListener(i -> {
             speedSeconds = speedSecondOptions.get(i);
             updateSpeedSecondsHint();
+            updateAdvancedSummary();
             saveScanSettings();
         });
         updateSpeedSecondsHint();
@@ -466,16 +477,22 @@ public class MainActivity extends AppCompatActivity {
                 .getBoolean(PREFS_PORTS_OPEN, false);
         boolean regionsOpen = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
                 .getBoolean(PREFS_REGIONS_OPEN, false);
+        boolean advancedOpen = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+                .getBoolean(PREFS_ADVANCED_OPEN, false);
 
         boxPorts.setVisibility(portsOpen ? View.VISIBLE : View.GONE);
         arrowPorts.setRotation(portsOpen ? 180f : 0f);
         boxRegions.setVisibility(regionsOpen ? View.VISIBLE : View.GONE);
         arrowRegions.setRotation(regionsOpen ? 180f : 0f);
+        boxAdvanced.setVisibility(advancedOpen ? View.VISIBLE : View.GONE);
+        arrowAdvanced.setRotation(advancedOpen ? 180f : 0f);
 
         headerPorts.setOnClickListener(v ->
                 toggleSection(boxPorts, arrowPorts, PREFS_PORTS_OPEN));
         headerRegions.setOnClickListener(v ->
                 toggleSection(boxRegions, arrowRegions, PREFS_REGIONS_OPEN));
+        headerAdvanced.setOnClickListener(v ->
+                toggleSection(boxAdvanced, arrowAdvanced, PREFS_ADVANCED_OPEN));
 
         // 自由输入的地区代码也算在摘要里，不然收起后看到的是过时的值
         editCountries.addTextChangedListener(new android.text.TextWatcher() {
@@ -493,8 +510,50 @@ public class MainActivity extends AppCompatActivity {
             }
         });
 
+        // 高级选项收起时也要看得出填没填：不然用户会忘了自己填过节点域名，
+        // 更糟的是忘了填却以为填了 —— 那项直接决定结果能不能用。
+        android.text.TextWatcher advancedWatcher = new android.text.TextWatcher() {
+            @Override
+            public void beforeTextChanged(CharSequence sq, int st, int c, int a) {
+            }
+
+            @Override
+            public void onTextChanged(CharSequence sq, int st, int b, int c) {
+            }
+
+            @Override
+            public void afterTextChanged(android.text.Editable e) {
+                updateAdvancedSummary();
+            }
+        };
+        editSNI.addTextChangedListener(advancedWatcher);
+        editSpeedURL.addTextChangedListener(advancedWatcher);
+
         updatePortsSummary();
         updateRegionsSummary();
+        updateAdvancedSummary();
+    }
+
+    /**
+     * 高级选项收起时的摘要。
+     *
+     * <p>三项按「影响结果可信度」排序显示：节点域名没填是最需要提醒的，
+     * 它决定了会不会挡掉「握手成功但一发数据就断」的 IP；测速地址其次；
+     * 测速时长总是显示，因为它一直在生效。
+     */
+    private void updateAdvancedSummary() {
+        if (txtAdvancedSummary == null) return;
+        java.util.List<String> parts = new java.util.ArrayList<>();
+        if (editSNI.getText().toString().trim().isEmpty()) {
+            parts.add("未填域名");
+        } else {
+            parts.add("已填域名");
+        }
+        if (!editSpeedURL.getText().toString().trim().isEmpty()) {
+            parts.add("自定义测速");
+        }
+        parts.add("测速 " + speedSeconds + " 秒");
+        txtAdvancedSummary.setText(android.text.TextUtils.join(" · ", parts));
     }
 
     private void toggleSection(View box, View arrow, String prefKey) {

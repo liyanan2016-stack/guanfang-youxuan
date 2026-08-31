@@ -148,18 +148,6 @@
       </div>
       <span class="hint sub" id="countHint">只要最快的一个</span>
     </div>
-    <!-- 测速时长：默认 5 秒会整段落在运营商「突发不限速」窗口里，
-         测出来比持续可用带宽高得多，于是「优选很快、实际用起来很慢」。
-         10/15 秒能跨过这个窗口。 -->
-    <div class="row">
-      <label class="lbl">测速时长</label>
-      <div class="seg" id="segSpeedSeconds">
-        <button data-s="5" class="on">5秒</button>
-        <button data-s="10">10秒</button>
-        <button data-s="15">15秒</button>
-      </div>
-      <span class="hint sub" id="speedSecondsHint">最快出结果；实际使用比优选结果慢很多时改 10 或 15 秒</span>
-    </div>
     <!-- 端口：原版只测 80/443，优选出的 IP 拿去接一个跑在 2053 的节点
          会报 closed pipe，因为验证的根本不是要用的那个端口 -->
     <div class="row col">
@@ -190,6 +178,20 @@
         <div class="hint sub">
           留空则用公共镜像站测速 —— 那测的是别人域名的速度，和你自己节点的实际速度可能差很远。
           填你自己域名下的一个大文件（100MB 以上）才最准。必须带文件路径。
+        </div>
+        <!-- 测速时长：默认 5 秒会整段落在运营商「突发不限速」窗口里，
+             测出来比持续可用带宽高得多，于是「优选很快、实际用起来很慢」。
+             10/15 秒能跨过这个窗口。 -->
+        <div class="row" style="margin-top:10px">
+          <label class="lbl">测速时长</label>
+          <div class="seg" id="segSpeedSeconds">
+            <button data-s="5" class="on">5秒</button>
+            <button data-s="10">10秒</button>
+            <button data-s="15">15秒</button>
+          </div>
+        </div>
+        <div class="hint sub" id="speedSecondsHint">
+          最快出结果；实际使用比优选结果慢很多时改 10 或 15 秒
         </div>
       </div>
     </div>
