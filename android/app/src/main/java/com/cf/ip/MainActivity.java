@@ -134,6 +134,10 @@ public class MainActivity extends AppCompatActivity {
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private final AtomicBoolean isRunning = new AtomicBoolean(false);
     private Runnable progressPoller;
+    /** IP 段校验的防抖任务，见 scheduleRangesValidation()。 */
+    private Runnable rangesValidator;
+    /** 停止输入多久之后才真的校验 IP 段。 */
+    private static final long RANGES_VALIDATE_DELAY_MS = 300L;
     private static Toast activeToast;
     private String currentIp = "";
 
@@ -179,10 +183,64 @@ public class MainActivity extends AppCompatActivity {
     /** 当前选中的常用地区代码 */
     private final java.util.LinkedHashSet<String> selectedRegions = new java.util.LinkedHashSet<>();
 
+    /**
+     * 核心层是否可用。false 表示 onCreate 提前退出了，界面字段全是 null，
+     * 任何依赖它们的回调都必须先看这个标志。
+     */
+    private boolean coreReady = false;
+
+    /**
+     * 探一次核心层，装不上就把失败原因显示在界面上并返回 false。
+     *
+     * <p>用 Better.version() 当探针：它只返回一个常量，不碰文件不碰网络，
+     * 但足以触发 .so 的加载。
+     *
+     * <p>catch Throwable 而不是 Exception：这里等的就是
+     * UnsatisfiedLinkError / ExceptionInInitializerError，都在 Error 分支。
+     */
+    private boolean ensureCoreLoaded() {
+        try {
+            Better.version();
+            coreReady = true;
+            return true;
+        } catch (Throwable t) {
+            // 复用进度卡片显示错误：这时候还没走到任何初始化，
+            // 能安全碰的只有布局里已有的视图
+            try {
+                View box = findViewById(R.id.layoutProgress);
+                TextView title = findViewById(R.id.txtProgressTitle);
+                TextView body = findViewById(R.id.txtProgress);
+                View bar = findViewById(R.id.progressBar);
+                if (box != null) box.setVisibility(View.VISIBLE);
+                if (bar != null) bar.setVisibility(View.GONE);
+                if (title != null) title.setText("无法启动");
+                if (body != null) {
+                    body.setText("核心组件加载失败（" + t.getClass().getSimpleName() + "）。\n\n"
+                            + "通常是安装包与手机架构不匹配。请改用 universal 版本的安装包，"
+                            + "或选择与手机匹配的 arm64-v8a / armeabi-v7a 版本。");
+                }
+            } catch (Throwable ignored) {
+                // 连显示错误都失败了就别再挣扎，至少不要在这里再崩一次
+            }
+            return false;
+        }
+    }
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
+
+        // 核心层的 .so 装不上时要说清楚，不能白屏或闪退。
+        //
+        // 为什么会装不上：release 按 ABI 分包（build.gradle 的 abi splits），
+        // 用户从第三方渠道拿到的包和自己手机架构不匹配是现实场景。这时
+        // 第一次碰到 Better 的任何方法都会抛 UnsatisfiedLinkError，
+        // 而它是 Error 不是 Exception —— 一路冒到 onCreate 外就是启动即崩，
+        // 用户只看到「应用已停止运行」，不知道该换哪个包。
+        if (!ensureCoreLoaded()) {
+            return;
+        }
 
         segIPVersion = findViewById(R.id.segIPVersion);
         segCount = findViewById(R.id.segCount);
@@ -736,6 +794,11 @@ public class MainActivity extends AppCompatActivity {
 
         // IP 段边打边校验。填错（少个斜杠、粘进中文标点、v4/v6 混填）很容易，
         // 而错误本来只在点了扫描、等完初始化之后才暴露。
+        //
+        // 但校验不能每敲一个字符就跑：它在核心层要真的展开子网（上限两万个，
+        // 还要去重加排序），而这是在主线程上。粘一个 104.0.0.0/8 进去，
+        // 每次按键都要跑满这个量，界面直接卡住。所以延后 300ms，
+        // 期间又有输入就把上一次的取消掉 —— 只在停手时校验一次。
         editRanges.addTextChangedListener(new android.text.TextWatcher() {
             @Override
             public void beforeTextChanged(CharSequence sq, int st, int c, int a) {
@@ -747,7 +810,7 @@ public class MainActivity extends AppCompatActivity {
 
             @Override
             public void afterTextChanged(android.text.Editable e) {
-                validateRanges();
+                scheduleRangesValidation();
             }
         });
 
@@ -793,11 +856,31 @@ public class MainActivity extends AppCompatActivity {
     }
 
     /**
+     * 延后校验 IP 段，停手 300ms 才真的跑。
+     *
+     * <p>为什么需要：{@link #validateRanges()} 会调核心层展开子网，上限两万个，
+     * 而这是主线程。每敲一个字符跑一次的话，粘贴一个大段进去界面就卡死。
+     * 300ms 是「打字停顿」和「反馈及时」之间的折中：连续输入时不触发，
+     * 手一停就出结果。
+     */
+    private void scheduleRangesValidation() {
+        if (rangesValidator != null) {
+            mainHandler.removeCallbacks(rangesValidator);
+        }
+        rangesValidator = this::validateRanges;
+        mainHandler.postDelayed(rangesValidator, RANGES_VALIDATE_DELAY_MS);
+    }
+
+    /**
      * 预检 IP 段并更新提示与摘要。
      *
      * <p>校验逻辑不在这里重写一遍 —— 走核心层的 {@link Better#previewIPRanges}，
      * 保证「界面说没问题」和「扫描时真能解析」是同一套判断。两处各写一份
      * 必然会出现「界面放过了、扫描才报错」。
+     *
+     * <p>核心层只调一次，解析结果直接传给摘要。原来这里和
+     * {@link #updateRangesSummary} 各调一次，等于每次校验把两万个子网
+     * 展开两遍。
      */
     private void validateRanges() {
         if (editRanges == null || txtRangesHint == null) return;
@@ -807,13 +890,14 @@ public class MainActivity extends AppCompatActivity {
         rangesValid = true;
         String hint;
         int color = R.color.text_secondary;
+        org.json.JSONObject parsed = null;
         try {
-            org.json.JSONObject o = new org.json.JSONObject(json);
-            if (o.optBoolean("ok", false)) {
-                hint = o.optString("summary", "");
+            parsed = new org.json.JSONObject(json);
+            if (parsed.optBoolean("ok", false)) {
+                hint = parsed.optString("summary", "");
             } else {
                 rangesValid = false;
-                hint = o.optString("error", "IP 段格式不对");
+                hint = parsed.optString("error", "IP 段格式不对");
                 color = R.color.danger;
             }
         } catch (org.json.JSONException e) {
@@ -822,7 +906,7 @@ public class MainActivity extends AppCompatActivity {
         }
         txtRangesHint.setText(hint);
         txtRangesHint.setTextColor(getColor(color));
-        updateRangesSummary();
+        updateRangesSummary(parsed);
     }
 
     /**
@@ -830,8 +914,12 @@ public class MainActivity extends AppCompatActivity {
      *
      * <p>折叠不能把信息藏掉：用户忘了自己填过段、然后奇怪为什么只扫了
      * 几十个子网，这种困惑必须避免。
+     *
+     * @param parsed 已解析好的预检结果，由 {@link #validateRanges()} 传进来。
+     *               为 null 表示调用方手上没有（比如恢复设置时），这时自己去问
+     *               核心层 —— 但常规路径必须复用，否则两万个子网要展开两遍。
      */
-    private void updateRangesSummary() {
+    private void updateRangesSummary(org.json.JSONObject parsed) {
         if (txtRangesSummary == null) return;
         String raw = editRanges.getText().toString().trim();
         if (raw.isEmpty()) {
@@ -843,7 +931,8 @@ public class MainActivity extends AppCompatActivity {
             return;
         }
         try {
-            org.json.JSONObject o = new org.json.JSONObject(Better.previewIPRanges(raw));
+            org.json.JSONObject o = parsed != null
+                    ? parsed : new org.json.JSONObject(Better.previewIPRanges(raw));
             int v4 = o.optInt("v4", 0);
             int v6 = o.optInt("v6", 0);
             java.util.List<String> parts = new java.util.ArrayList<>();
@@ -1162,10 +1251,30 @@ public class MainActivity extends AppCompatActivity {
                 String resultJson = Better.getIPs(v4, useTLS, bandwidth, ports, countries, sni, count,
                         speedSecs, speedSrc, speedURL, ipRanges);
                 mainHandler.post(() -> onScanResult(resultJson));
-            } catch (Exception e) {
-                mainHandler.post(() -> showResult("扫描出错: " + e.getMessage()));
+            } catch (Throwable t) {
+                // 必须走 onScanFailed 而不是直接 showResult：showResult 只画结果区，
+                // 不会把 isRunning 置回 false、不会复位按钮、不会停轮询。
+                // 直接调它的话，扫描一旦出错，界面就永久停在「扫描中...」且
+                // 两个按钮都不可点，进度轮询还在每 500ms 空转 —— 只能杀进程。
+                //
+                // 捕获 Throwable 而不是 Exception：缺 .so 时抛的是
+                // UnsatisfiedLinkError，属于 Error 分支，Exception 拦不住。
+                final String msg = t.getMessage() == null
+                        ? t.getClass().getSimpleName() : t.getMessage();
+                mainHandler.post(() -> onScanFailed(msg));
             }
         });
+    }
+
+    // onScanFailed 扫描线程异常时的收尾。
+    //
+    // 和 onScanResult 走同一套复位动作 —— 状态复位不能只在成功路径上做，
+    // 否则出错一次界面就废了。
+    private void onScanFailed(String message) {
+        stopProgressPolling();
+        isRunning.set(false);
+        resetButtons();
+        showResult("扫描出错: " + message);
     }
 
     private void startProgressPolling() {
@@ -1320,12 +1429,15 @@ public class MainActivity extends AppCompatActivity {
                         txtProgress.setText(err);
                     }
                 });
-            } catch (Exception e) {
+            } catch (Throwable t) {
+                // 同 startScan：缺 .so 抛的是 Error，Exception 拦不住
+                final String msg = t.getMessage() == null
+                        ? t.getClass().getSimpleName() : t.getMessage();
                 mainHandler.post(() -> {
                     stopProgressPolling();
                     progressBar.setVisibility(View.GONE);
                     txtProgressTitle.setText("说明");
-                    txtProgress.setText("更新失败: " + e.getMessage());
+                    txtProgress.setText("更新失败: " + msg);
                     isRunning.set(false);
                     resetButtons();
                 });
@@ -2011,7 +2123,10 @@ public class MainActivity extends AppCompatActivity {
     @Override
     protected void onPause() {
         super.onPause();
-        saveScanSettings();
+        // 核心层加载失败时界面字段是 null，没有设置可存
+        if (coreReady) {
+            saveScanSettings();
+        }
     }
 
     private void hideKeyboard(View view) {
@@ -2027,9 +2142,12 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void exitApp() {
-        saveScanSettings();
+        // 核心层加载失败时界面字段全是 null，这些收尾动作都要跳过
+        if (coreReady) {
+            saveScanSettings();
+        }
         stopProgressPolling();
-        if (isRunning.get()) {
+        if (coreReady && isRunning.get()) {
             Better.cancelScan();
         }
         if (activeToast != null) {
@@ -2047,7 +2165,27 @@ public class MainActivity extends AppCompatActivity {
     @Override
     protected void onDestroy() {
         super.onDestroy();
+        // 核心层没加载成功时 onCreate 提前返回了，下面这些字段都还是初始值。
+        // isRunning/executor/mainHandler 是 final 初始化的，安全；
+        // 但没必要去碰 Better，它本来就是加载失败的那个。
         stopProgressPolling();
+        // 待执行的防抖校验也要撤掉：它是个持有 Activity 的延迟回调
+        if (rangesValidator != null) {
+            mainHandler.removeCallbacks(rangesValidator);
+            rangesValidator = null;
+        }
+        // 必须显式取消核心层任务。
+        //
+        // executor.shutdownNow() 只给工作线程置一个中断标志，而线程此刻正卡在
+        // Better.getIPs 这个 JNI 调用里 —— Go 侧不认 Java 中断，只认
+        // cancelScan()。不调它的话，Activity 已经销毁、扫描却还在跑：
+        //   · 工作线程的 lambda 捕获了 this，整个视图树几分钟内无法回收
+        //   · 扫完还会往已销毁的视图 setText、往 prefs 写历史
+        //   · 新 Activity 的 isRunning 是 false，用户能再点一次扫描，
+        //     两次扫描并发写 Go 侧的包级全局（进度、测速地址、诊断计数）
+        if (coreReady && isRunning.get()) {
+            Better.cancelScan();
+        }
         executor.shutdownNow();
     }
 }

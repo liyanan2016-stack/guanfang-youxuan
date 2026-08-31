@@ -5,10 +5,37 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"time"
 )
+
+// ----------------------- panic 兜底 -----------------------
+//
+// 导出函数是 Go 和 Java 的边界，panic 必须在这里被拦下来。
+//
+// 原因是 gomobile 不把 Go panic 转成 Java 异常：它让整个进程 abort。
+// Java 侧写 catch (Throwable) 也拦不到，用户看到的就是闪退，而且没有
+// 任何线索能说明是哪一步炸的 —— 对一个「给很多人用」的工具，这是最差的
+// 失败方式。
+//
+// 拦下来之后至少能把错误显示在界面上，用户能截图反馈，也能改个参数重试。
+//
+// 只在导出函数入口加，不往内部函数撒：内部 panic 是真 bug，应该在开发
+// 阶段暴露出来（测试里不经过这层），而不是被就地吞掉。
+
+// recoverToMsg 把 panic 转成一句人话，写进 *dst。
+//
+// 附上 stack trace：这类崩溃很难复现，用户能贴回来的信息就是全部线索。
+// 用 defer 的指针写法而不是返回值，因为要在具名返回值上生效。
+func recoverToMsg(what string, dst *string) {
+	if r := recover(); r != nil {
+		*dst = fmt.Sprintf("%s时发生内部错误：%v", what, r)
+		// 日志走 stderr，Android 上进 logcat；界面只显示上面那句
+		fmt.Printf("panic in %s: %v\n%s\n", what, r, debug.Stack())
+	}
+}
 
 // ScanResult 扫描结果
 type ScanResult struct {
@@ -106,7 +133,7 @@ func SpeedSeconds() string { return joinInts(allowedSpeedSeconds) }
 //	{"ok":false,"error":"IP 段 \"104.16/13\" 格式不对：..."}
 //
 // gomobile 只支持基本类型跨语言传递，所以走 JSON 字符串而不是结构体。
-func PreviewIPRanges(raw string) string {
+func PreviewIPRanges(raw string) (out string) {
 	type preview struct {
 		OK        bool   `json:"ok"`
 		V4        int    `json:"v4"`
@@ -115,6 +142,16 @@ func PreviewIPRanges(raw string) string {
 		Summary   string `json:"summary"`
 		Error     string `json:"error,omitempty"`
 	}
+
+	// panic 兜底：这个函数跟着用户输入跑，是最容易被畸形输入打到的入口
+	defer func() {
+		var msg string
+		recoverToMsg("预检 IP 段", &msg)
+		if msg != "" {
+			b, _ := json.Marshal(preview{OK: false, Error: msg})
+			out = string(b)
+		}
+	}()
 
 	ranges, err := parseCustomRanges(raw)
 	if err != nil {
@@ -156,7 +193,7 @@ func MaxIPRangeSubnets() int { return maxCustomSubnets }
 // Version 返回核心层版本号，供界面显示
 func Version() string { return libVersion }
 
-const libVersion = "1.21"
+const libVersion = "1.22"
 
 // HTTPPorts 返回明文模式可选端口的 CSV，供界面构建选项
 func HTTPPorts() string { return joinInts(cfHTTPPorts) }
@@ -323,7 +360,22 @@ func enterTask() {
 // 界面派发到后台线程之前应先调 BeginTask()，否则这段窗口里的取消会丢。
 func GetIPs(v4 bool, useTLS bool, bandwidth int, ports string, countries string, sni string,
 	wantCount int, speedSeconds int, speedSource string, speedURL string,
-	ipRanges string) string {
+	ipRanges string) (resultJSON string) {
+	// panic 兜底：详见 recoverToMsg。扫描是整个工具最长最复杂的路径，
+	// 也是最需要「炸了也能说清为什么」的地方。
+	//
+	// 返回值取名 resultJSON 而不是 out：函数体里已经有个 out 装
+	// cloudflareTest 的结果（testOutcome），撞名会静默遮蔽。
+	defer func() {
+		var msg string
+		recoverToMsg("扫描", &msg)
+		if msg != "" {
+			setProgress(msg)
+			b, _ := json.Marshal(ScanResult{Error: msg})
+			resultJSON = string(b)
+		}
+	}()
+
 	enterTask()
 	wantCount = normalizeResultCount(wantCount)
 	setProgress("正在初始化...")
@@ -503,7 +555,17 @@ var dataFiles = []string{"locations.json", "ips-v4.txt", "ips-v6.txt", "url.txt"
 // 那就是谎报。
 //
 // 阻塞调用，需在后台线程执行。界面派发前应先调 BeginTask()。
-func UpdateData() string {
+func UpdateData() (out string) {
+	// panic 兜底：详见 recoverToMsg
+	defer func() {
+		var msg string
+		recoverToMsg("更新数据", &msg)
+		if msg != "" {
+			setProgress(msg)
+			out = msg
+		}
+	}()
+
 	// 必须取一个干净的取消上下文。否则用户「取消扫描 → 点更新数据」时，
 	// downloadAllData 会在第一个 isCancelled() 检查处直接返回，
 	// 但进度照样显示"数据更新完成" —— 删掉了旧文件却什么都没下载，
