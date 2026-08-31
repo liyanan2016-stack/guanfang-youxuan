@@ -1,4 +1,4 @@
-<img width="1264" height="2800" alt="微信图片_20260901024056_43_24" src="https://github.com/user-attachments/assets/b0647dfe-a08a-4b5b-ba18-9db4df5cd891" />
+<img width="600" height="1400" alt="YULAN1" src="https://github.com/user-attachments/assets/b0647dfe-a08a-4b5b-ba18-9db4df5cd891" />
 
 # 官方优选
 
