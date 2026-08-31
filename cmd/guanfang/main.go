@@ -127,6 +127,8 @@ func handleScan(w http.ResponseWriter, r *http.Request) {
 		SpeedSource string `json:"speedSource"`
 		// SpeedURL 手动测速地址。非空时优先于 SpeedSource。
 		SpeedURL string `json:"speedURL"`
+		// IPRanges 指定的 IP 段。非空则替代官方列表作为数据源。
+		IPRanges string `json:"ipRanges"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, map[string]string{"error": "参数解析失败: " + err.Error()})
@@ -149,7 +151,7 @@ func handleScan(w http.ResponseWriter, r *http.Request) {
 
 	go func() {
 		res := better.GetIPs(req.V4, req.UseTLS, req.Bandwidth, req.Ports, req.Countries, req.SNI,
-			req.Count, req.SpeedSeconds, req.SpeedSource, req.SpeedURL)
+			req.Count, req.SpeedSeconds, req.SpeedSource, req.SpeedURL, req.IPRanges)
 
 		stateMu.Lock()
 		lastResult = res
@@ -309,6 +311,28 @@ func handleMeta(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// handlePreviewRanges 预检用户填写的 IP 段，供前端边打边校验。
+//
+// 直接把核心层 PreviewIPRanges 的 JSON 透传出去，前端不重写一套解析 ——
+// 两处各写一份必然出现「界面放过了、扫描才报错」。
+func handlePreviewRanges(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		IPRanges string `json:"ipRanges"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, map[string]any{"ok": false, "error": "参数解析失败: " + err.Error()})
+		return
+	}
+	// PreviewIPRanges 返回的已经是 JSON 字符串，再包一层会变成转义后的
+	// 字符串字面量，前端拿到的是 "\"{...}\"" —— 直接写原始字节
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.Write([]byte(better.PreviewIPRanges(req.IPRanges)))
+}
+
 // ---------- 浏览器 ----------
 
 func openBrowser(url string) {
@@ -353,6 +377,7 @@ func main() {
 	mux.HandleFunc("/api/update-data", handleUpdateData)
 	mux.HandleFunc("/api/clear-cache", handleClearCache)
 	mux.HandleFunc("/api/history", handleHistory)
+	mux.HandleFunc("/api/preview-ranges", handlePreviewRanges)
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/" {
 			http.NotFound(w, r)

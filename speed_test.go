@@ -495,7 +495,7 @@ func TestSpeedTestURLFallbackOnBadFormat(t *testing.T) {
 			// 只要不是空串就算过。内容非空但格式不对才必须走兜底。
 			expectFallback := strings.TrimSpace(bad) != ""
 
-			downloadAllData()
+			downloadAllData(true)
 
 			if speedTestDomain == "" || speedTestFile == "" {
 				t.Fatalf("url.txt=%q 时必须兜底，实际 domain=%q file=%q",
@@ -549,7 +549,7 @@ func TestGoodSpeedTestURLIsUsed(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	downloadAllData()
+	downloadAllData(true)
 
 	if speedTestDomain != "speed.example.com" {
 		t.Fatalf("应沿用 url.txt 的域名，实际 %q", speedTestDomain)
@@ -646,7 +646,7 @@ func TestStaleDataTriggersRedownload(t *testing.T) {
 
 	// 网络不可用（baipiao 地址在测试环境访问不通或超时），
 	// downloadAllData 应沿用旧副本，url.txt 内容仍然可用
-	downloadAllData()
+	downloadAllData(true)
 
 	// 无论网络成功与否，都不能把 speedTestDomain 留成空串
 	if speedTestDomain == "" || speedTestFile == "" {

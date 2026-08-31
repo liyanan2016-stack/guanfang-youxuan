@@ -62,6 +62,9 @@ type ScanResult struct {
 	// SpeedSourceISP 自动档探测到的运营商（AS 组织名）。
 	// 让用户看懂「为什么自动档给我选了移动专属源」。
 	SpeedSourceISP string `json:"speedSourceISP"`
+	// UsingCustomRanges 本次是否用了指定的 IP 段。
+	// 界面据此在结果里标明数据源，避免用户忘了自己填过段。
+	UsingCustomRanges bool `json:"usingCustomRanges"`
 	// SpeedHint 测速层面的诊断提示（地址全部 404、文件太小等）。
 	// 和 Error 分开：这条说的是「测速地址配错了」，不是「没找到 IP」。
 	SpeedHint string `json:"speedHint"`
@@ -90,10 +93,70 @@ func ResultCounts() string { return joinInts(allowedResultCounts) }
 // 同 ResultCounts：档位定义只留核心层一份。
 func SpeedSeconds() string { return joinInts(allowedSpeedSeconds) }
 
+// PreviewIPRanges 预检用户填写的 IP 段，返回 JSON 供界面即时反馈。
+//
+// 为什么要单独一个入口：IP 段填错（少个斜杠、粘进了中文标点、v4/v6 混填）
+// 是很容易犯的错，但错误只有在点了扫描、等完初始化之后才会暴露。
+// 界面拿这个函数在输入时就能显示「已识别 2048 个 /24 子网」或者具体错在
+// 哪一条，不用等一轮扫描。
+//
+// 返回字段：
+//
+//	{"ok":true,"v4":2048,"v6":0,"truncated":false,"summary":"..."}
+//	{"ok":false,"error":"IP 段 \"104.16/13\" 格式不对：..."}
+//
+// gomobile 只支持基本类型跨语言传递，所以走 JSON 字符串而不是结构体。
+func PreviewIPRanges(raw string) string {
+	type preview struct {
+		OK        bool   `json:"ok"`
+		V4        int    `json:"v4"`
+		V6        int    `json:"v6"`
+		Truncated bool   `json:"truncated"`
+		Summary   string `json:"summary"`
+		Error     string `json:"error,omitempty"`
+	}
+
+	ranges, err := parseCustomRanges(raw)
+	if err != nil {
+		b, _ := json.Marshal(preview{OK: false, Error: err.Error()})
+		return string(b)
+	}
+
+	p := preview{
+		OK:        true,
+		V4:        len(ranges.V4),
+		V6:        len(ranges.V6),
+		Truncated: ranges.Truncated,
+	}
+	switch {
+	case ranges.empty():
+		// 空输入不是错误：表示「不指定，用官方列表」
+		p.Summary = "未指定，将使用官方 IP 段列表"
+	default:
+		var parts []string
+		if p.V4 > 0 {
+			parts = append(parts, fmt.Sprintf("%d 个 IPv4 /%d 子网", p.V4, customV4SplitPrefix))
+		}
+		if p.V6 > 0 {
+			parts = append(parts, fmt.Sprintf("%d 个 IPv6 /%d 子网", p.V6, customV6SplitPrefix))
+		}
+		p.Summary = "已识别 " + strings.Join(parts, "、")
+		if p.Truncated {
+			p.Summary += fmt.Sprintf("（超出上限，已截断到 %d 个）", maxCustomSubnets)
+		}
+	}
+
+	b, _ := json.Marshal(p)
+	return string(b)
+}
+
+// MaxIPRangeSubnets 返回指定 IP 段展开后的子网数量上限，供界面提示。
+func MaxIPRangeSubnets() int { return maxCustomSubnets }
+
 // Version 返回核心层版本号，供界面显示
 func Version() string { return libVersion }
 
-const libVersion = "1.19"
+const libVersion = "1.20"
 
 // HTTPPorts 返回明文模式可选端口的 CSV，供界面构建选项
 func HTTPPorts() string { return joinInts(cfHTTPPorts) }
@@ -248,10 +311,19 @@ func enterTask() {
 // 电信和联通下可能落到不同国家，事先无从得知。所以这里是「测完再筛」，
 // 筛得越窄要试的子网就越多，耗时会明显变长。
 //
+// 关于 ipRanges —— 指定自己的 IP 段，填了就完全替代官方列表作为数据源。
+// 官方列表是 CF 全部对外宣告的 6500+ 个 /24，绝大部分和用户所在网络的
+// 实际质量无关，而 104.16/104.21 这些段早被扫烂。有明确目标时（别人分享
+// 的优质段、自己账户对应的段）直接指定，候选池从六千多压到几十个，
+// 扫描时间和命中率都好得多。支持 CIDR / 单 IP / 起止范围，见
+// ParseIPRanges 的说明。填了但解析失败会直接返回错误而不回落官方列表 ——
+// 用户以为在扫自己的段却拿到全网结果，比报错糟糕得多。
+//
 // 阻塞调用，需在后台线程执行。
 // 界面派发到后台线程之前应先调 BeginTask()，否则这段窗口里的取消会丢。
 func GetIPs(v4 bool, useTLS bool, bandwidth int, ports string, countries string, sni string,
-	wantCount int, speedSeconds int, speedSource string, speedURL string) string {
+	wantCount int, speedSeconds int, speedSource string, speedURL string,
+	ipRanges string) string {
 	enterTask()
 	wantCount = normalizeResultCount(wantCount)
 	setProgress("正在初始化...")
@@ -259,6 +331,16 @@ func GetIPs(v4 bool, useTLS bool, bandwidth int, ports string, countries string,
 	ipType := 4
 	if !v4 {
 		ipType = 6
+	}
+
+	// 指定 IP 段要在任何耗时操作之前解析：填错了立刻报错，
+	// 不要让用户等到下载完数据、跑完侦察才看到「格式不对」
+	ranges, err := parseCustomRanges(ipRanges)
+	if err != nil {
+		msg := "IP 段填写有误：" + err.Error()
+		setProgress(msg)
+		b, _ := json.Marshal(ScanResult{Error: msg})
+		return string(b)
 	}
 
 	if bandwidth <= 0 {
@@ -281,7 +363,7 @@ func GetIPs(v4 bool, useTLS bool, bandwidth int, ports string, countries string,
 	startTime := timeNow()
 
 	out := cloudflareTest(ipType, useTLS, defaultTaskNum, speedTarget, filter, strings.TrimSpace(sni),
-		wantCount, speedSeconds, speedSource, speedURL)
+		wantCount, speedSeconds, speedSource, speedURL, ranges)
 
 	realBandwidth := out.MaxSpeed / 128
 	elapsed := int(timeSince(startTime).Seconds())
@@ -301,6 +383,8 @@ func GetIPs(v4 bool, useTLS bool, bandwidth int, ports string, countries string,
 		SpeedTarget:    out.SpeedTarget,
 		SpeedSourceISP: out.SpeedSourceISP,
 		SpeedHint:      out.SpeedHint,
+
+		UsingCustomRanges: out.UsingCustomRanges,
 	}
 	if out.IP != "" && out.Port > 0 {
 		result.Address = net.JoinHostPort(out.IP, strconv.Itoa(out.Port))
@@ -353,6 +437,11 @@ func GetIPs(v4 bool, useTLS bool, bandwidth int, ports string, countries string,
 		}
 		if len(filter.Countries) > 0 {
 			result.Error += "。官方 IP 的落地地区取决于运营商线路，缩小地区会大幅降低命中率，可放宽后重试"
+		}
+		// 指定段扫不出东西时的处置方式和全网扫不出来完全不同：不该建议
+		// 「放宽条件」，该让他确认那些段是不是真的过了 CF
+		if out.UsingCustomRanges {
+			result.Error += "。这些是你指定的 IP 段，请确认它们确实是 Cloudflare 的段且在你的网络下可达；也可以清空 IP 段改用官方列表"
 		}
 		setProgress(fmt.Sprintf("扫描结束，用时 %d 秒", elapsed))
 
@@ -425,7 +514,9 @@ func UpdateData() string {
 	for _, f := range dataFiles {
 		removeFile(dataPath(f))
 	}
-	initLocations()
+	// 手动更新数据：官方列表也要拉。用户点的就是「更新数据」，
+	// 这时按需跳过没有意义
+	initLocations(true)
 
 	// 不能无条件报成功：下载失败时 downloadAllData 已经写了错误原因，
 	// 这里再盖一层"更新完成"就是谎报。

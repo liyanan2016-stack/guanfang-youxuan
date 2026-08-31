@@ -61,6 +61,15 @@
     width:100%;max-width:420px;background:var(--card2);border:1px solid var(--line);
     color:var(--fg);border-radius:8px;padding:8px 10px;font-size:14px;
   }
+  /* IP 段用多行输入：分享出来的段列表通常一行一条，
+     单行输入框会逼用户先手工拼成逗号分隔 */
+  textarea.wide{
+    width:100%;max-width:420px;background:var(--card2);border:1px solid var(--line);
+    color:var(--fg);border-radius:8px;padding:8px 10px;font-size:14px;
+    font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+    resize:vertical;line-height:1.5;
+  }
+  .hint.bad{color:var(--danger,#f2545b)}
   .hint.sub{margin-top:0}
   .toggle{font-size:13px;color:var(--accent);cursor:pointer;font-weight:600}
   .btns{display:flex;gap:10px;flex-wrap:wrap}
@@ -167,6 +176,23 @@
       </div>
     </div>
     <div class="row col">
+      <span class="toggle" id="rangeToggle">▸ 指定 IP 段</span>
+      <div id="rangeBox" style="display:none">
+        <div class="hint sub">
+          留空=扫官方全部 IP 段（6500+ 个 /24）。填了就只扫你给的段：候选池小得多，
+          速度快很多，命中率也高 —— 前提是这些段在你的网络下确实好用。
+        </div>
+        <div class="hint sub">
+          支持 CIDR（<code>104.16.0.0/13</code>）、单个 IP、起止范围
+          （<code>104.16.0.0-104.16.3.255</code>）。一行一条或用逗号/空格分隔都行，
+          <code>#</code> 和 <code>//</code> 开头按注释忽略。大段会自动切成 /24。
+        </div>
+        <textarea id="ipRanges" class="wide" rows="4" style="margin-top:8px"
+                  placeholder="例如：&#10;104.16.0.0/13&#10;172.64.0.0/13"></textarea>
+        <div class="hint sub" id="rangeHint">未指定，将使用官方 IP 段列表</div>
+      </div>
+    </div>
+    <div class="row col">
       <span class="toggle" id="advToggle">▸ 高级选项</span>
       <div id="advBox" style="display:none">
         <input type="text" id="sni" class="wide" placeholder="自定义 SNI / Host，例如 your.domain.com">
@@ -237,6 +263,7 @@
       <div class="kv"><div class="k">测速时长</div><div class="v" id="rSpeedSecs">-</div></div>
       <div class="kv"><div class="k">测速地址</div><div class="v" id="rSpeedTarget">-</div></div>
       <div class="kv"><div class="k">检测运营商</div><div class="v" id="rSpeedISP">-</div></div>
+      <div class="kv"><div class="k">数据源</div><div class="v" id="rSource">-</div></div>
     </div>
     <div class="ipbox">
       <code id="rIP">-</code>
@@ -483,6 +510,49 @@ document.getElementById('advToggle').onclick = ()=>{
   document.getElementById('advToggle').textContent = show ? '▾ 高级选项' : '▸ 高级选项';
 };
 
+document.getElementById('rangeToggle').onclick = ()=>{
+  const box = document.getElementById('rangeBox');
+  const show = box.style.display === 'none';
+  box.style.display = show ? 'block' : 'none';
+  document.getElementById('rangeToggle').textContent = show ? '▾ 指定 IP 段' : '▸ 指定 IP 段';
+};
+
+// ---------- 指定 IP 段 ----------
+//
+// 边打边校验。校验逻辑不在前端重写 —— 走后端 /api/preview-ranges，
+// 保证「界面说没问题」和「扫描时真能解析」是同一套判断。两处各写一份
+// 必然出现「界面放过了、扫描才报错」。
+let rangesValid = true;
+let rangeCheckTimer = null;
+
+function scheduleRangeCheck(){
+  // 去抖 300ms：每敲一个字符打一次请求既浪费也会让提示闪烁
+  clearTimeout(rangeCheckTimer);
+  rangeCheckTimer = setTimeout(checkRanges, 300);
+}
+
+async function checkRanges(){
+  const raw = document.getElementById('ipRanges').value;
+  const hintEl = document.getElementById('rangeHint');
+  const r = await fetch('/api/preview-ranges',{
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ipRanges: raw})
+  }).then(r=>r.json()).catch(()=>null);
+
+  if(!r){
+    // 预检请求本身失败不该把用户拦住：扫描时后端还会再校验一次
+    rangesValid = true;
+    hintEl.textContent = '';
+    hintEl.classList.remove('bad');
+    return;
+  }
+  rangesValid = !!r.ok;
+  hintEl.textContent = r.ok ? (r.summary || '') : (r.error || 'IP 段格式不对');
+  hintEl.classList.toggle('bad', !r.ok);
+}
+
+document.getElementById('ipRanges').addEventListener('input', scheduleRangeCheck);
+
 // ---------- 运行状态 ----------
 
 function setBusy(on, label){
@@ -498,6 +568,7 @@ function setBusy(on, label){
   document.querySelectorAll('#chipPorts button,#chipRegions button,#chipSpeedSource button')
     .forEach(b=>b.disabled = on);
   document.getElementById('countriesExtra').disabled = on;
+  document.getElementById('ipRanges').disabled = on;
   document.getElementById('sni').disabled = on;
   document.getElementById('speedURL').disabled = on;
 }
@@ -517,6 +588,18 @@ document.getElementById('btnScan').onclick = async ()=>{
     return;
   }
 
+  // IP 段填错就别开始了。先把折叠区展开，否则用户看不到错在哪
+  const ipRanges = document.getElementById('ipRanges').value.trim();
+  if(!rangesValid){
+    toast('IP 段填写有误，请检查后再扫描');
+    const box = document.getElementById('rangeBox');
+    if(box.style.display === 'none'){
+      document.getElementById('rangeToggle').click();
+    }
+    document.getElementById('ipRanges').focus();
+    return;
+  }
+
   const r = await fetch('/api/scan',{
     method:'POST', headers:{'Content-Type':'application/json'},
     body: JSON.stringify({
@@ -525,6 +608,7 @@ document.getElementById('btnScan').onclick = async ()=>{
       speedSeconds: speedSeconds,
       speedSource: speedSource,
       speedURL: speedURL,
+      ipRanges: ipRanges,
       ports: Array.from(selectedPorts).join(','),
       countries: collectCountries(),
       sni: document.getElementById('sni').value.trim()
@@ -629,6 +713,10 @@ function showResult(r){
   document.getElementById('rSpeedSecs').textContent = r.speedSeconds ? r.speedSeconds+' 秒' : '-';
   document.getElementById('rSpeedTarget').textContent = r.speedTarget || '-';
   document.getElementById('rSpeedISP').textContent = r.speedSourceISP || '-';
+  // 数据源要回显：用户忘了自己填过 IP 段、然后奇怪为什么只测了几十个子网，
+  // 这种困惑必须避免
+  document.getElementById('rSource').textContent =
+    r.usingCustomRanges ? '你指定的 IP 段' : '官方 IP 段列表';
   renderMore(r.results);
 }
 

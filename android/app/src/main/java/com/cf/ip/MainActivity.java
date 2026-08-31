@@ -80,6 +80,16 @@ public class MainActivity extends AppCompatActivity {
     private View arrowRegions;
     private TextView txtRegionsSummary;
 
+    // 指定 IP 段折叠区
+    private View headerRanges;
+    private View boxRanges;
+    private View arrowRanges;
+    private TextView txtRangesSummary;
+    private EditText editRanges;
+    private TextView txtRangesHint;
+    /** 最近一次预检是否通过。false 时点扫描直接拦下 */
+    private boolean rangesValid = true;
+
     private View headerAdvanced;
     private View boxAdvanced;
     private View arrowAdvanced;
@@ -144,6 +154,8 @@ public class MainActivity extends AppCompatActivity {
     private static final String PREFS_PORTS_OPEN = "ports_open";
     private static final String PREFS_REGIONS_OPEN = "regions_open";
     private static final String PREFS_ADVANCED_OPEN = "advanced_open";
+    private static final String PREFS_RANGES_OPEN = "ranges_open";
+    private static final String PREFS_IP_RANGES = "ip_ranges";
     private static final int MAX_HISTORY = 10;
 
     /**
@@ -197,6 +209,12 @@ public class MainActivity extends AppCompatActivity {
         boxRegions = findViewById(R.id.boxRegions);
         arrowRegions = findViewById(R.id.arrowRegions);
         txtRegionsSummary = findViewById(R.id.txtRegionsSummary);
+        headerRanges = findViewById(R.id.headerRanges);
+        boxRanges = findViewById(R.id.boxRanges);
+        arrowRanges = findViewById(R.id.arrowRanges);
+        txtRangesSummary = findViewById(R.id.txtRangesSummary);
+        editRanges = findViewById(R.id.editRanges);
+        txtRangesHint = findViewById(R.id.txtRangesHint);
         headerAdvanced = findViewById(R.id.headerAdvanced);
         boxAdvanced = findViewById(R.id.boxAdvanced);
         arrowAdvanced = findViewById(R.id.arrowAdvanced);
@@ -606,11 +624,15 @@ public class MainActivity extends AppCompatActivity {
                 .getBoolean(PREFS_REGIONS_OPEN, false);
         boolean advancedOpen = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
                 .getBoolean(PREFS_ADVANCED_OPEN, false);
+        boolean rangesOpen = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+                .getBoolean(PREFS_RANGES_OPEN, false);
 
         boxPorts.setVisibility(portsOpen ? View.VISIBLE : View.GONE);
         arrowPorts.setRotation(portsOpen ? 180f : 0f);
         boxRegions.setVisibility(regionsOpen ? View.VISIBLE : View.GONE);
         arrowRegions.setRotation(regionsOpen ? 180f : 0f);
+        boxRanges.setVisibility(rangesOpen ? View.VISIBLE : View.GONE);
+        arrowRanges.setRotation(rangesOpen ? 180f : 0f);
         boxAdvanced.setVisibility(advancedOpen ? View.VISIBLE : View.GONE);
         arrowAdvanced.setRotation(advancedOpen ? 180f : 0f);
 
@@ -618,8 +640,27 @@ public class MainActivity extends AppCompatActivity {
                 toggleSection(boxPorts, arrowPorts, PREFS_PORTS_OPEN));
         headerRegions.setOnClickListener(v ->
                 toggleSection(boxRegions, arrowRegions, PREFS_REGIONS_OPEN));
+        headerRanges.setOnClickListener(v ->
+                toggleSection(boxRanges, arrowRanges, PREFS_RANGES_OPEN));
         headerAdvanced.setOnClickListener(v ->
                 toggleSection(boxAdvanced, arrowAdvanced, PREFS_ADVANCED_OPEN));
+
+        // IP 段边打边校验。填错（少个斜杠、粘进中文标点、v4/v6 混填）很容易，
+        // 而错误本来只在点了扫描、等完初始化之后才暴露。
+        editRanges.addTextChangedListener(new android.text.TextWatcher() {
+            @Override
+            public void beforeTextChanged(CharSequence sq, int st, int c, int a) {
+            }
+
+            @Override
+            public void onTextChanged(CharSequence sq, int st, int b, int c) {
+            }
+
+            @Override
+            public void afterTextChanged(android.text.Editable e) {
+                validateRanges();
+            }
+        });
 
         // 自由输入的地区代码也算在摘要里，不然收起后看到的是过时的值
         editCountries.addTextChangedListener(new android.text.TextWatcher() {
@@ -659,6 +700,71 @@ public class MainActivity extends AppCompatActivity {
         updatePortsSummary();
         updateRegionsSummary();
         updateAdvancedSummary();
+        validateRanges();
+    }
+
+    /**
+     * 预检 IP 段并更新提示与摘要。
+     *
+     * <p>校验逻辑不在这里重写一遍 —— 走核心层的 {@link Better#previewIPRanges}，
+     * 保证「界面说没问题」和「扫描时真能解析」是同一套判断。两处各写一份
+     * 必然会出现「界面放过了、扫描才报错」。
+     */
+    private void validateRanges() {
+        if (editRanges == null || txtRangesHint == null) return;
+        String raw = editRanges.getText().toString();
+        String json = Better.previewIPRanges(raw);
+
+        rangesValid = true;
+        String hint;
+        int color = R.color.text_secondary;
+        try {
+            org.json.JSONObject o = new org.json.JSONObject(json);
+            if (o.optBoolean("ok", false)) {
+                hint = o.optString("summary", "");
+            } else {
+                rangesValid = false;
+                hint = o.optString("error", "IP 段格式不对");
+                color = R.color.danger;
+            }
+        } catch (org.json.JSONException e) {
+            // 预检本身出错不该把用户拦住：核心层解析时还会再校验一次
+            hint = "";
+        }
+        txtRangesHint.setText(hint);
+        txtRangesHint.setTextColor(getColor(color));
+        updateRangesSummary();
+    }
+
+    /**
+     * 收起状态下标题行右侧显示 IP 段状态。
+     *
+     * <p>折叠不能把信息藏掉：用户忘了自己填过段、然后奇怪为什么只扫了
+     * 几十个子网，这种困惑必须避免。
+     */
+    private void updateRangesSummary() {
+        if (txtRangesSummary == null) return;
+        String raw = editRanges.getText().toString().trim();
+        if (raw.isEmpty()) {
+            txtRangesSummary.setText("官方全部段");
+            return;
+        }
+        if (!rangesValid) {
+            txtRangesSummary.setText("填写有误");
+            return;
+        }
+        try {
+            org.json.JSONObject o = new org.json.JSONObject(Better.previewIPRanges(raw));
+            int v4 = o.optInt("v4", 0);
+            int v6 = o.optInt("v6", 0);
+            java.util.List<String> parts = new java.util.ArrayList<>();
+            if (v4 > 0) parts.add("v4 " + v4 + " 段");
+            if (v6 > 0) parts.add("v6 " + v6 + " 段");
+            txtRangesSummary.setText(parts.isEmpty()
+                    ? "已指定" : android.text.TextUtils.join(" · ", parts));
+        } catch (org.json.JSONException e) {
+            txtRangesSummary.setText("已指定");
+        }
     }
 
     /**
@@ -921,6 +1027,18 @@ public class MainActivity extends AppCompatActivity {
         final int speedSecs = speedSeconds;
         final String speedSrc = speedSource;
         final String speedURL = editSpeedURL.getText().toString().trim();
+        final String ipRanges = editRanges.getText().toString().trim();
+
+        // IP 段填错就别开始了：核心层会立刻返回错误，但用户已经看到
+        // 「扫描中...」再变回来，不如现在就把光标送到出错的地方
+        if (!rangesValid) {
+            showToast("IP 段填写有误，请检查后再扫描");
+            if (boxRanges.getVisibility() != View.VISIBLE) {
+                toggleSection(boxRanges, arrowRanges, PREFS_RANGES_OPEN);
+            }
+            editRanges.requestFocus();
+            return;
+        }
 
         // 选了「手动输入」却没填地址：核心层会直接报错停下，与其让用户
         // 等一轮扫描再看到红字，不如现在就说清楚。
@@ -953,7 +1071,7 @@ public class MainActivity extends AppCompatActivity {
         executor.execute(() -> {
             try {
                 String resultJson = Better.getIPs(v4, useTLS, bandwidth, ports, countries, sni, count,
-                        speedSecs, speedSrc, speedURL);
+                        speedSecs, speedSrc, speedURL, ipRanges);
                 mainHandler.post(() -> onScanResult(resultJson));
             } catch (Exception e) {
                 mainHandler.post(() -> showResult("扫描出错: " + e.getMessage()));
@@ -1035,6 +1153,9 @@ public class MainActivity extends AppCompatActivity {
             String speedTarget = json.optString("speedTarget", "");
             // 自动档探到的运营商：让用户看懂「为什么给我选了这个源」
             String speedISP = json.optString("speedSourceISP", "");
+            // 数据源也要回显：用户忘了自己填过 IP 段、然后奇怪为什么
+            // 只测了几十个子网，这种困惑必须避免
+            boolean usedRanges = json.optBoolean("usingCustomRanges", false);
             String scanTime = formatNow();
 
             // 复制的必须是带端口的完整地址：只给 IP 就是原来那个
@@ -1052,7 +1173,8 @@ public class MainActivity extends AppCompatActivity {
                     + "总计用时: " + elapsed + " 秒"
                     + (speedSecs > 0 ? "\n测速时长: " + speedSecs + " 秒" : "")
                     + (speedTarget.isEmpty() ? "" : "\n测速地址: " + speedTarget)
-                    + (speedISP.isEmpty() ? "" : "\n检测运营商: " + speedISP);
+                    + (speedISP.isEmpty() ? "" : "\n检测运营商: " + speedISP)
+                    + "\n数据源: " + (usedRanges ? "你指定的 IP 段" : "官方 IP 段列表");
 
             showStructuredResult(address, bandwidth, realBandwidth, maxSpeed, latencyMs,
                     dataCenter, country, elapsed);
@@ -1269,6 +1391,9 @@ public class MainActivity extends AppCompatActivity {
         // 自定义测速地址同理：填过一次的人下次还想用同一个文件
         editSpeedURL.setText(getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
                 .getString(PREFS_SPEED_URL, ""));
+        // 指定的 IP 段更要记住：手打十几条 CIDR 一次就够了
+        editRanges.setText(getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+                .getString(PREFS_IP_RANGES, ""));
     }
 
     /**
@@ -1343,6 +1468,7 @@ public class MainActivity extends AppCompatActivity {
                 .putInt(PREFS_SPEED_SECONDS, speedSeconds)
                 .putString(PREFS_SPEED_URL, editSpeedURL.getText().toString().trim())
                 .putString(PREFS_SPEED_SOURCE, speedSource)
+                .putString(PREFS_IP_RANGES, editRanges.getText().toString().trim())
                 .apply();
     }
 

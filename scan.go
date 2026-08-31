@@ -652,6 +652,12 @@ type candidateIP struct {
 	Subnet string
 }
 
+// getRandomIPv4s 为每个子网拼 ipsPerSubnet 个随机 IP。
+//
+// 前缀长度必须参与计算。官方列表清一色 /24，随机末位八位组恰好正确；
+// 但「指定 IP 段」功能允许用户填 /28、/32 这种更细的段，那时候还随机
+// 整个末位就会拼出段外的地址 —— 用户指定了 1.2.3.0/28 却去测 1.2.3.200，
+// 那既不是他要的，也可能根本不是 CF 的地址。
 func getRandomIPv4s(ipList []string) []candidateIP {
 	var out []candidateIP
 	for _, raw := range ipList {
@@ -660,26 +666,57 @@ func getRandomIPv4s(ipList []string) []candidateIP {
 			continue
 		}
 		base := subnet
+		// 默认按 /24 处理：不带前缀的裸地址在旧数据里出现过，
+		// 保持原来「随机末位」的行为
+		prefixLen := 24
 		if idx := strings.Index(base, "/"); idx >= 0 {
+			if n, err := strconv.Atoi(base[idx+1:]); err == nil && n >= 0 && n <= 32 {
+				prefixLen = n
+			}
 			base = base[:idx]
 		}
 		octets := strings.Split(base, ".")
 		if len(octets) != 4 {
 			continue
 		}
+
+		// 可随机的地址数。前缀比 /24 短时仍只随机末位八位组 ——
+		// 切分成 /24 是抽样器那一层的事（见 custom_range.go），
+		// 这里拿到 /13 说明是旧数据或直接调用，按 /24 的老行为处理最安全。
+		hostBits := 32 - prefixLen
+		if hostBits > 8 {
+			hostBits = 8
+		}
+		if hostBits < 0 {
+			hostBits = 0
+		}
+		span := 1 << hostBits
+
+		// /32 只有一个地址，随机没有意义，直接给出它本身
+		if span <= 1 {
+			out = append(out, candidateIP{IP: base, Subnet: subnet})
+			continue
+		}
+
+		lastBase, err := strconv.Atoi(octets[3])
+		if err != nil {
+			continue
+		}
+		// 归一到段起点：用户填 1.2.3.5/28 时起点是 1.2.3.0
+		lastBase = lastBase & ^(span - 1)
+
 		// 同一子网内取多个不重复的末位。重复没有意义 ——
 		// 测两次同一个地址不会提高命中率，只是浪费一次 RTT。
-		used := make(map[int]struct{}, ipsPerSubnet)
-		for range ipsPerSubnet {
-			var last int
-			// 256 个取值里挑 2 个，冲突概率极低；给几次机会就够，
-			// 死循环风险不值得为此承担
-			for range 4 {
-				last = nextRandomIntn(256)
-				if _, dup := used[last]; !dup {
-					break
-				}
-			}
+		want := ipsPerSubnet
+		if want > span {
+			want = span
+		}
+		used := make(map[int]struct{}, want)
+		for len(used) < want {
+			last := lastBase + nextRandomIntn(span)
+			// span 很小时（/31 只有 2 个地址）随机容易撞，但 want 已经
+			// 收敛到 span，最坏情况是多转几次；用 len(used) 做循环条件
+			// 保证一定能取满而不是靠固定次数碰运气
 			if _, dup := used[last]; dup {
 				continue
 			}
@@ -821,8 +858,14 @@ func (s *subnetSampler) used() int  { return s.cursor }
 
 // ----------------------- 数据下载 -----------------------
 
-// downloadAllData 确保所有数据文件存在，缺失则自动下载
-func downloadAllData() {
+// downloadAllData 确保所有数据文件存在，缺失则自动下载。
+//
+// needIPList=false 时跳过 ips-v4/v6.txt。指定 IP 段扫描时用得上：那时
+// 官方列表根本不会被读，首次使用的人却要为一个 6500 行的下载干等 ——
+// 而且数据源挂掉时还会直接失败，明明用户的段一个字节都不依赖它。
+// url.txt 和 locations.json 仍要取：前者是测速地址兜底，后者是
+// colo → 城市/国家的翻译表，指定段一样要用。
+func downloadAllData(needIPList bool) {
 	urlFilename := dataPath("url.txt")
 	if !dataFresh(urlFilename) {
 		if isCancelled() {
@@ -876,6 +919,9 @@ func downloadAllData() {
 		{"ips-v4.txt", "https://www.baipiao.eu.org/cloudflare/ips-v4"},
 		{"ips-v6.txt", "https://www.baipiao.eu.org/cloudflare/ips-v6"},
 	} {
+		if !needIPList {
+			break
+		}
 		if isCancelled() {
 			return
 		}
@@ -938,8 +984,8 @@ func fetchLocations(fp string) error {
 }
 
 // initLocations 初始化数据中心位置信息
-func initLocations() {
-	downloadAllData()
+func initLocations(needIPList bool) {
+	downloadAllData(needIPList)
 
 	if isCancelled() {
 		return
@@ -1931,6 +1977,12 @@ type testOutcome struct {
 	// 探测失败或非自动档时为空。
 	SpeedSourceISP string
 
+	// UsingCustomRanges 本次是否用了用户指定的 IP 段。
+	//
+	// 界面据此改写「没找到」的文案：指定段扫不出东西的处置方式（换段、
+	// 放宽地区、确认那些段真的过了 CF）和全网扫不出来完全不同。
+	UsingCustomRanges bool
+
 	// Results 按速度降序的全部结果（含 IP/Port/MaxSpeed 等字段）。
 	//
 	// 用户要 5 或 10 个结果时，第一个和 IP/Port/MaxSpeed 那几个顶层字段
@@ -1944,8 +1996,10 @@ type testOutcome struct {
 // speedSeconds 是正式测速的时长（秒），收敛到 allowedSpeedSeconds 里的档位。
 // speedSource 是测速源标识（见 speedsource.go），空则按 auto 处理。
 // customSpeedURL 是用户手动填的测速地址，非空时优先于 speedSource。
+// ranges 是用户指定的 IP 段，非空则替代官方列表作为数据源。
 func cloudflareTest(ipType int, useTLS bool, taskNum int, speed int, filter scanFilter, sni string,
-	wantCount int, speedSeconds int, speedSource string, customSpeedURL string) testOutcome {
+	wantCount int, speedSeconds int, speedSource string, customSpeedURL string,
+	ranges customRanges) testOutcome {
 	wantCount = normalizeResultCount(wantCount)
 	fullBudget := time.Duration(normalizeSpeedSeconds(speedSeconds)) * time.Second
 	pool := newResultPool(wantCount)
@@ -1983,26 +2037,59 @@ func cloudflareTest(ipType int, useTLS bool, taskNum int, speed int, filter scan
 	}
 	userSpeedDomain, userSpeedFile = d, f
 
-	initLocations()
+	// 指定了 IP 段就不必下载官方列表：那个文件不会被读，首次使用的人
+	// 没必要为一个 6500 行的下载干等，数据源挂掉时也不该因此扫不了
+	initLocations(ranges.empty())
 	markScanStart()
 	if isCancelled() {
 		return testOutcome{}
 	}
-	filename := dataPath("ips-v4.txt")
-	if ipType == 6 {
-		filename = dataPath("ips-v6.txt")
+
+	// 数据源：用户指定了 IP 段就用他的，否则读官方列表。
+	//
+	// 指定段时完全不碰 ips-v4.txt —— 那个文件没下载过或过期都不影响，
+	// 用户的意图很明确「只测我给的这些」。locations.json 仍然要（上面
+	// initLocations 已经处理），它只是 colo → 城市/国家的翻译表。
+	var ipList []string
+	usingCustom := !ranges.empty()
+	if usingCustom {
+		ipList = ranges.listFor(ipType)
+		if len(ipList) == 0 {
+			// 填了 v4 段却在扫 v6（或反过来）：这是最容易犯的错，
+			// 直接说清楚比让他对着「未找到可用 IP」猜半天好
+			want := "IPv4"
+			other := "IPv6"
+			if ipType == 6 {
+				want, other = "IPv6", "IPv4"
+			}
+			msg := fmt.Sprintf("你指定的 IP 段里没有 %s 段（只有 %s），请切换协议或补充 %s 段",
+				want, other, want)
+			setProgress(msg)
+			return testOutcome{SpeedHint: msg}
+		}
+		hint := fmt.Sprintf("使用你指定的 IP 段：%d 个 /%d 子网",
+			len(ipList), customSplitPrefixFor(ipType))
+		if ranges.Truncated {
+			hint += fmt.Sprintf("（已截断到上限 %d 个）", maxCustomSubnets)
+		}
+		setScanProgress(hint)
+	} else {
+		filename := dataPath("ips-v4.txt")
+		if ipType == 6 {
+			filename = dataPath("ips-v6.txt")
+		}
+		content, err := getFileContent(filename)
+		if err != nil {
+			setProgress("读取 IP 列表失败: " + err.Error())
+			return testOutcome{}
+		}
+		ipList = parseIPList(content)
+		if len(ipList) == 0 {
+			setProgress("子网列表为空，请点击「更新数据」重新下载")
+			return testOutcome{}
+		}
+		setScanProgress(fmt.Sprintf("正在从 %d 个子网中随机生成 IP...", len(ipList)))
 	}
-	content, err := getFileContent(filename)
-	if err != nil {
-		setProgress("读取 IP 列表失败: " + err.Error())
-		return testOutcome{}
-	}
-	ipList := parseIPList(content)
-	if len(ipList) == 0 {
-		setProgress("子网列表为空，请点击「更新数据」重新下载")
-		return testOutcome{}
-	}
-	setScanProgress(fmt.Sprintf("正在从 %d 个子网中随机生成 IP...", len(ipList)))
 
 	batchSize := sampleSize
 	if len(ipList) < batchSize {
@@ -2033,7 +2120,13 @@ func cloudflareTest(ipType int, useTLS bool, taskNum int, speed int, filter scan
 	// 覆盖率下限：只看轮次会让覆盖率非常低（6500 子网只测 1000 个约 15%），
 	// 而"最快的 IP"很可能就在剩下的 85% 里。达标结果会立即返回，
 	// 所以这个下限只在"一直没达标"时才会真正延长扫描。
+	//
+	// 指定 IP 段时改成「全测完」：用户给的池子本来就小（几十到几千个子网），
+	// 而且是他明确挑出来的，测 30% 就收手等于把他指定的段大部分跳过了。
 	minSubnets := int(float64(sampler.total()) * minCoverageRatio)
+	if usingCustom {
+		minSubnets = sampler.total()
+	}
 
 	// 绝对上限。理论上"子网取完"和"覆盖率达标"都能终止循环，
 	// 但这是个会跑很久的用户可见循环，留一道硬闸比事后调试死循环便宜。
@@ -2134,6 +2227,7 @@ func cloudflareTest(ipType int, useTLS bool, taskNum int, speed int, filter scan
 			out.RoundsRun = round
 			out.Tested = sampler.used()
 			out.PoolSize = sampler.total()
+			out.UsingCustomRanges = usingCustom
 			annotateSpeedInfo(&out, fullBudget, autoISP)
 			return out
 		}
@@ -2160,6 +2254,7 @@ func cloudflareTest(ipType int, useTLS bool, taskNum int, speed int, filter scan
 	best.PoolSize = sampler.total()
 	best.PoolExhausted = poolExhausted
 	best.BelowTarget = best.IP != ""
+	best.UsingCustomRanges = usingCustom
 
 	if best.IP != "" {
 		if poolExhausted {

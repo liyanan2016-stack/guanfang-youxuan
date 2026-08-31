@@ -802,6 +802,120 @@
                 </LinearLayout>
             </LinearLayout>
 
+            <!-- 指定 IP 段。填了就完全替代官方列表作为数据源。
+
+                 为什么值得单独一个折叠区而不是塞进高级选项：它改的是
+                 「扫什么」这个最根本的问题，影响比高级选项里那几项大得多；
+                 而且多行输入框需要的高度也放不进那一堆小控件里。 -->
+            <View
+                android:layout_width="match_parent"
+                android:layout_height="1dp"
+                android:background="@color/glass_hairline" />
+
+            <LinearLayout
+                android:id="@+id/headerRanges"
+                android:layout_width="match_parent"
+                android:layout_height="48dp"
+                android:background="?android:attr/selectableItemBackground"
+                android:clickable="true"
+                android:focusable="true"
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="指定 IP 段"
+                    android:textColor="@color/text_primary"
+                    android:textSize="14sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:id="@+id/txtRangesSummary"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="10dp"
+                    android:layout_weight="1"
+                    android:ellipsize="end"
+                    android:gravity="end"
+                    android:maxLines="1"
+                    android:text=""
+                    android:textColor="@color/text_secondary"
+                    android:textSize="13sp" />
+
+                <ImageView
+                    android:id="@+id/arrowRanges"
+                    android:layout_width="20dp"
+                    android:layout_height="20dp"
+                    android:layout_marginStart="4dp"
+                    android:contentDescription="展开指定 IP 段设置"
+                    android:src="@drawable/ic_chevron_down" />
+            </LinearLayout>
+
+            <LinearLayout
+                android:id="@+id/boxRanges"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:visibility="gone">
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="留空=扫官方全部 IP 段（6500+ 个 /24）。填了就只扫你给的段：候选池小得多，速度快很多，命中率也高——前提是这些段在你的网络下确实好用。"
+                    android:textColor="@color/text_muted"
+                    android:textSize="11sp" />
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="6dp"
+                    android:text="支持 CIDR（104.16.0.0/13）、单个 IP、起止范围（104.16.0.0-104.16.3.255）。一行一条或用逗号/空格分隔都行，# 和 // 开头按注释忽略。大段会自动切成 /24。"
+                    android:textColor="@color/text_muted"
+                    android:textSize="11sp" />
+
+                <!-- 多行输入：分享出来的 IP 段列表通常是一行一条，
+                     单行输入框会让用户先手工拼成逗号分隔 -->
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:background="@drawable/glass_input"
+                    android:orientation="horizontal"
+                    android:paddingHorizontal="12dp"
+                    android:paddingVertical="8dp">
+
+                    <EditText
+                        android:id="@+id/editRanges"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:background="@android:color/transparent"
+                        android:gravity="top|start"
+                        android:hint="例如：&#10;104.16.0.0/13&#10;172.64.0.0/13"
+                        android:importantForAutofill="no"
+                        android:inputType="textMultiLine|textNoSuggestions"
+                        android:maxLines="6"
+                        android:minLines="3"
+                        android:padding="0dp"
+                        android:scrollbars="vertical"
+                        android:textColor="@color/text_primary"
+                        android:textColorHint="@color/text_muted"
+                        android:textSize="14sp" />
+                </LinearLayout>
+
+                <!-- 即时校验结果。填错（少个斜杠、粘进中文标点、v4/v6 混填）
+                     很容易，而错误本来只在点了扫描、等完初始化后才暴露。 -->
+                <TextView
+                    android:id="@+id/txtRangesHint"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="6dp"
+                    android:layout_marginBottom="6dp"
+                    android:text="未指定，将使用官方 IP 段列表"
+                    android:textColor="@color/text_secondary"
+                    android:textSize="11sp" />
+            </LinearLayout>
+
             <!-- 高级选项。三项都是「不动也能用、动了才更准」的东西：
                  节点域名、自定义测速地址、测速时长。放进折叠区是因为绝大多数
                  人不填也能出结果，而三块加起来（两个输入框 + 两段长说明 +
