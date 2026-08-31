@@ -905,9 +905,10 @@
                         android:textSize="14sp" />
                 </LinearLayout>
 
-                <!-- 自定义测速地址。不填时测的是公共镜像站（别人的域名），
-                     那个速度和「CF 边缘回源到你的服务器」这条实际链路无关 ——
-                     这正是「优选很快、实际很慢」最常见的原因。 -->
+                <!-- 测速源。这是「优选很快、实际很慢」的头号原因：
+                     旧版固定拿公共镜像站的静态大文件测速，那条链路和用户
+                     自己的节点无关，而且运营商（尤其移动国际出口）对不同
+                     域名的限速策略差别很大。自动档会探运营商挑合适的源。 -->
                 <View
                     android:layout_width="match_parent"
                     android:layout_height="1dp"
@@ -918,42 +919,67 @@
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="14dp"
-                    android:text="自定义测速地址（选填）"
+                    android:text="测速源"
                     android:textColor="@color/text_primary"
                     android:textSize="13sp"
                     android:textStyle="bold" />
 
                 <TextView
+                    android:id="@+id/txtSpeedSourceHint"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="3dp"
-                    android:text="留空则用公共镜像站测速，那测的是别人域名的速度，和你自己节点的实际速度可能差很远。填你自己域名下的一个大文件（100MB 以上）才最准。必须带文件路径。"
+                    android:text="自动选择：先探测你的运营商，移动线路会换用对移动更友好的测速源"
                     android:textColor="@color/text_secondary"
                     android:textSize="11sp" />
 
-                <LinearLayout
+                <com.cf.ip.FlowLayout
+                    android:id="@+id/layoutSpeedSource"
                     android:layout_width="match_parent"
-                    android:layout_height="44dp"
-                    android:layout_marginTop="8dp"
-                    android:background="@drawable/glass_input"
-                    android:gravity="center_vertical"
-                    android:orientation="horizontal"
-                    android:paddingHorizontal="10dp">
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp" />
 
-                    <EditText
-                        android:id="@+id/editSpeedURL"
+                <!-- 手动测速地址。选「手动输入」时才显示 —— 平时露着一个空
+                     输入框，用户会以为不填就不测速。 -->
+                <LinearLayout
+                    android:id="@+id/boxSpeedURL"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical"
+                    android:visibility="gone">
+
+                    <TextView
                         android:layout_width="match_parent"
-                        android:layout_height="match_parent"
-                        android:background="@android:color/transparent"
-                        android:hint="例如 your.domain.com/files/100mb.bin"
-                        android:imeOptions="actionDone"
-                        android:importantForAutofill="no"
-                        android:inputType="textUri"
-                        android:padding="0dp"
-                        android:singleLine="true"
-                        android:textColor="@color/text_primary"
-                        android:textColorHint="@color/text_secondary"
-                        android:textSize="14sp" />
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="10dp"
+                        android:text="填你自己域名下的一个大文件（100MB 以上），测出来的才是「CF 边缘回源到你服务器」这条实际链路的速度。必须带文件路径。"
+                        android:textColor="@color/text_secondary"
+                        android:textSize="11sp" />
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="44dp"
+                        android:layout_marginTop="8dp"
+                        android:background="@drawable/glass_input"
+                        android:gravity="center_vertical"
+                        android:orientation="horizontal"
+                        android:paddingHorizontal="10dp">
+
+                        <EditText
+                            android:id="@+id/editSpeedURL"
+                            android:layout_width="match_parent"
+                            android:layout_height="match_parent"
+                            android:background="@android:color/transparent"
+                            android:hint="例如 your.domain.com/files/100mb.bin"
+                            android:imeOptions="actionDone"
+                            android:importantForAutofill="no"
+                            android:inputType="textUri"
+                            android:padding="0dp"
+                            android:singleLine="true"
+                            android:textColor="@color/text_primary"
+                            android:textColorHint="@color/text_secondary"
+                            android:textSize="14sp" />
+                    </LinearLayout>
                 </LinearLayout>
 
                 <!-- 测速时长。默认 5 秒会整段落在运营商「突发不限速」窗口里，

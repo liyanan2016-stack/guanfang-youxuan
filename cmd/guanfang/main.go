@@ -123,7 +123,9 @@ func handleScan(w http.ResponseWriter, r *http.Request) {
 		Count int `json:"count"`
 		// SpeedSeconds 正式测速时长（5/10/15）。缺省 0 = 用默认 5 秒。
 		SpeedSeconds int `json:"speedSeconds"`
-		// SpeedURL 自定义测速地址。缺省空 = 用 url.txt 下发的公共地址。
+		// SpeedSource 测速源标识（见 better.SpeedSources）。缺省空 = auto。
+		SpeedSource string `json:"speedSource"`
+		// SpeedURL 手动测速地址。非空时优先于 SpeedSource。
 		SpeedURL string `json:"speedURL"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -147,7 +149,7 @@ func handleScan(w http.ResponseWriter, r *http.Request) {
 
 	go func() {
 		res := better.GetIPs(req.V4, req.UseTLS, req.Bandwidth, req.Ports, req.Countries, req.SNI,
-			req.Count, req.SpeedSeconds, req.SpeedURL)
+			req.Count, req.SpeedSeconds, req.SpeedSource, req.SpeedURL)
 
 		stateMu.Lock()
 		lastResult = res
@@ -301,6 +303,9 @@ func handleMeta(w http.ResponseWriter, r *http.Request) {
 		// 改一处忘另一处就会出现「界面能选、核心层不认」的端口
 		"httpPorts":  better.HTTPPorts(),
 		"httpsPorts": better.HTTPSPorts(),
+		// 测速源同理：标识与中文名都由核心层给出，前端按下标配对
+		"speedSources":      better.SpeedSources(),
+		"speedSourceLabels": better.SpeedSourceLabels(),
 	})
 }
 

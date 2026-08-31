@@ -23,16 +23,22 @@ func TestParseSpeedURL(t *testing.T) {
 		// 空串 = 没填，用默认地址，不算错误
 		{"", "", "", false},
 		{"   ", "", "", false},
-		// 只有域名没有路径：拼出来是首页 HTML，几十 KB 就读完了，
-		// 测出来的数字毫无意义，必须报错而不是放过
-		{"a.com", "", "", true},
-		{"https://a.com", "", "", true},
-		{"a.com/", "", "", true},
-		{"a.com/   ", "", "", true},
-		// 域名里混进了不该有的东西
-		{"a.com:8443/x.bin", "", "", true},
-		{"a com/x.bin", "", "", true},
-		{"a.com?q=1/x.bin", "", "", true},
+		// 查询串必须完整保留：__down?bytes=N 的字节数在里面，
+		// 丢了它就变成下载 0 字节
+		{"speed.cloudflare.com/__down?bytes=99999999",
+			"speed.cloudflare.com", "__down?bytes=99999999", false},
+		{"https://cf.090227.xyz/__down?bytes=99999999",
+			"cf.090227.xyz", "__down?bytes=99999999", false},
+		// 端口要能填，但域名里不能留端口 —— 留着会让 TLS SNI 带上端口
+		// 导致握手失败。测速连的是被测 IP + 用户选的端口，URL 里的
+		// 端口本来就没意义。
+		{"a.com:8443/x.bin", "a.com", "x.bin", false},
+		// 只填域名：speed.okl.abrdns.com 这类根路径就是大文件的源确实
+		// 存在，放过。真拿到首页 HTML 会被 speedTestMinBytes 诊断兜住。
+		{"speed.okl.abrdns.com", "speed.okl.abrdns.com", "", false},
+		{"a.com/", "a.com", "", false},
+		// 域名缺失
+		{"https:///x.bin", "", "", true},
 	}
 	for _, c := range cases {
 		d, f, err := parseSpeedURL(c.in)
@@ -82,15 +88,15 @@ func TestSpeedTestTargetPrefersUserURL(t *testing.T) {
 	}
 }
 
-// 只设了域名没设文件（不该出现，但真出现时）不能拼出半个 URL，
-// 应回落到公共地址
-func TestSpeedTestTargetIgnoresPartialUserURL(t *testing.T) {
+// 只设了域名没设路径是合法的：speed.okl.abrdns.com 这类根路径就是
+// 大文件的源确实存在，不能因为路径空就当「没设置」而回落公共地址。
+func TestSpeedTestTargetAcceptsRootPath(t *testing.T) {
 	withTestSpeedURL(t, "public.example", "public/file.iso")
 	userSpeedDomain, userSpeedFile = "mine.example", ""
 	t.Cleanup(func() { userSpeedDomain, userSpeedFile = "", "" })
 
-	if d, f := speedTestTarget(); d != "public.example" || f != "public/file.iso" {
-		t.Fatalf("自定义地址不完整时应回落公共地址，实际 %q/%q", d, f)
+	if d, f := speedTestTarget(); d != "mine.example" || f != "" {
+		t.Fatalf("根路径地址应生效，实际 %q/%q", d, f)
 	}
 }
 

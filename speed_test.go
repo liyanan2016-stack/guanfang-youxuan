@@ -489,30 +489,45 @@ func TestSpeedTestURLFallbackOnBadFormat(t *testing.T) {
 				t.Fatal(err)
 			}
 
+			// 空文件 / 全空白会被 dataFresh 判为「没有数据」（Size()==0
+			// 或 TrimSpace 后为空），downloadAllData 会真去下载一份新的。
+			// 那种情况下拿到的是线上真实地址，不该断言等于内置兜底 ——
+			// 只要不是空串就算过。内容非空但格式不对才必须走兜底。
+			expectFallback := strings.TrimSpace(bad) != ""
+
 			downloadAllData()
 
 			if speedTestDomain == "" || speedTestFile == "" {
 				t.Fatalf("url.txt=%q 时必须兜底，实际 domain=%q file=%q",
 					bad, speedTestDomain, speedTestFile)
 			}
-			if speedTestDomain != fallbackSpeedTestDomain {
-				t.Fatalf("应使用内置备用域名 %q，实际 %q", fallbackSpeedTestDomain, speedTestDomain)
+			if expectFallback && speedTestDomain != fallbackSpeedTestDomain {
+				t.Fatalf("url.txt=%q 应使用内置备用域名 %q，实际 %q",
+					bad, fallbackSpeedTestDomain, speedTestDomain)
 			}
 		}()
 	}
 }
 
-// TestFallbackIsNotCloudflareDown 兜底地址不能用 speed.cloudflare.com/__down。
-// 那个端点只服务直连边缘节点，非直连访问一律 403。
-func TestFallbackIsNotCloudflareDown(t *testing.T) {
-	if strings.Contains(fallbackSpeedTestDomain, "speed.cloudflare.com") {
-		t.Fatalf("兜底不能用 speed.cloudflare.com，实际 %q", fallbackSpeedTestDomain)
-	}
-	if strings.Contains(fallbackSpeedTestFile, "__down") {
-		t.Fatalf("兜底不能用 __down 端点，实际 %q", fallbackSpeedTestFile)
-	}
+// TestFallbackIsGeneratedStream 兜底地址必须是「按需生成字节流」的端点。
+//
+// v1.19 前这个测试断言的恰好相反 —— 当时认为 speed.cloudflare.com/__down
+// 只服务直连边缘节点、非直连一律 403，于是兜底用了 cloudflaremirrors.com
+// 上的静态 ISO。后来指定任意 CF IP 实测 __down 均返回 200，那个结论是
+// 当时测法有误。
+//
+// 现在要求兜底用 __down 这类端点，因为静态大文件有三个问题：吃边缘缓存
+// （没命中时回源那段跟被测 IP 无关）、上游改版就 404、字节数不可控。
+func TestFallbackIsGeneratedStream(t *testing.T) {
 	if fallbackSpeedTestDomain == "" || fallbackSpeedTestFile == "" {
 		t.Fatal("兜底地址不能为空")
+	}
+	if !strings.Contains(fallbackSpeedTestFile, "__down") {
+		t.Fatalf("兜底应使用 __down 这类按需生成端点，实际 %q", fallbackSpeedTestFile)
+	}
+	// 字节数要够大：预算内下载不完才能测出持续速度
+	if !strings.Contains(fallbackSpeedTestFile, "bytes=") {
+		t.Fatalf("兜底端点应指定字节数，实际 %q", fallbackSpeedTestFile)
 	}
 }
 

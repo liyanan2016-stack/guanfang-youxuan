@@ -59,6 +59,9 @@ type ScanResult struct {
 	// 必须回显：用户不知道速度数字是拿什么测出来的时候，
 	// 「优选很快、实际很慢」这个问题就永远排查不下去。
 	SpeedTarget string `json:"speedTarget"`
+	// SpeedSourceISP 自动档探测到的运营商（AS 组织名）。
+	// 让用户看懂「为什么自动档给我选了移动专属源」。
+	SpeedSourceISP string `json:"speedSourceISP"`
 	// SpeedHint 测速层面的诊断提示（地址全部 404、文件太小等）。
 	// 和 Error 分开：这条说的是「测速地址配错了」，不是「没找到 IP」。
 	SpeedHint string `json:"speedHint"`
@@ -90,7 +93,7 @@ func SpeedSeconds() string { return joinInts(allowedSpeedSeconds) }
 // Version 返回核心层版本号，供界面显示
 func Version() string { return libVersion }
 
-const libVersion = "1.18"
+const libVersion = "1.19"
 
 // HTTPPorts 返回明文模式可选端口的 CSV，供界面构建选项
 func HTTPPorts() string { return joinInts(cfHTTPPorts) }
@@ -221,7 +224,8 @@ func enterTask() {
 // sni: 自定义 SNI/Host，空则用 cloudflare.com
 // wantCount: 要输出几个结果，收敛到 1/5/10 之一（见 ResultCounts）。
 // speedSeconds: 正式测速时长（秒），收敛到 5/10/15 之一（见 SpeedSeconds），0 用默认 5。
-// speedURL: 自定义测速地址（如 "your.domain.com/files/100mb.bin"），空则用公共地址。
+// speedSource: 测速源标识（见 SpeedSources），空或 "auto" 表示按运营商自动挑选。
+// speedURL: 手动测速地址（如 "your.domain.com/files/100mb.bin"），非空时优先于 speedSource。
 //
 // 关于 wantCount —— 它直接决定扫描时长：每个结果都要占一次完整测速预算
 // （speedTestFullBudget），要 10 个就意味着单轮测速时间翻几倍。所以只开放
@@ -231,10 +235,13 @@ func enterTask() {
 // 5 秒测速整段都落在窗口内，测出来比持续可用带宽高得多，于是「优选很快、
 // 实际使用很慢」。拉到 10/15 秒能跨过窗口，代价是扫描明显变长。
 //
-// 关于 speedURL —— 默认测速地址是 url.txt 下发的公共镜像，那是别人的域名，
-// 缓存命中率、CF 账户等级、有没有回源都和用户自己的节点无关。填自己的域名
-// 才能测到「CF 边缘 → 回源到我的服务器」这条实际会用的链路。填了它，RTT
-// 阶段默认 SNI 也会跟着走同一个域名（除非另外指定 sni）。
+// 关于 speedSource 与 speedURL —— 内置测速源都是「按需生成字节流」的端点
+// （speed.cloudflare.com/__down 等），不吃边缘缓存、不会因上游改版失效。
+// 自动档会探测运营商，移动线路换用对移动友好的源，因为移动国际出口对不同
+// 域名的 QoS 策略差别很大，这直接影响「测出来的速度像不像实际能用的速度」。
+// 填 speedURL 用自己的域名则更进一步：测的是「CF 边缘 → 回源到我的服务器」
+// 这条真正会用到的链路。填了它，RTT 阶段默认 SNI 也会跟着走同一个域名
+// （除非另外指定 sni）。
 //
 // 关于 countries —— 和反代优选有本质区别：反代节点列表自带国家标签，
 // 可以先筛后测；官方 IP 的落地机房取决于运营商线路，同一个 IP 在
@@ -244,7 +251,7 @@ func enterTask() {
 // 阻塞调用，需在后台线程执行。
 // 界面派发到后台线程之前应先调 BeginTask()，否则这段窗口里的取消会丢。
 func GetIPs(v4 bool, useTLS bool, bandwidth int, ports string, countries string, sni string,
-	wantCount int, speedSeconds int, speedURL string) string {
+	wantCount int, speedSeconds int, speedSource string, speedURL string) string {
 	enterTask()
 	wantCount = normalizeResultCount(wantCount)
 	setProgress("正在初始化...")
@@ -274,25 +281,26 @@ func GetIPs(v4 bool, useTLS bool, bandwidth int, ports string, countries string,
 	startTime := timeNow()
 
 	out := cloudflareTest(ipType, useTLS, defaultTaskNum, speedTarget, filter, strings.TrimSpace(sni),
-		wantCount, speedSeconds, speedURL)
+		wantCount, speedSeconds, speedSource, speedURL)
 
 	realBandwidth := out.MaxSpeed / 128
 	elapsed := int(timeSince(startTime).Seconds())
 
 	result := ScanResult{
-		IP:            out.IP,
-		Port:          out.Port,
-		Bandwidth:     bandwidth,
-		RealBandwidth: realBandwidth,
-		MaxSpeed:      out.MaxSpeed,
-		LatencyMs:     out.LatencyMs,
-		DataCenter:    out.DataCenter,
-		Country:       out.Country,
-		Elapsed:       elapsed,
-		WantCount:     wantCount,
-		SpeedSeconds:  out.SpeedSeconds,
-		SpeedTarget:   out.SpeedTarget,
-		SpeedHint:     out.SpeedHint,
+		IP:             out.IP,
+		Port:           out.Port,
+		Bandwidth:      bandwidth,
+		RealBandwidth:  realBandwidth,
+		MaxSpeed:       out.MaxSpeed,
+		LatencyMs:      out.LatencyMs,
+		DataCenter:     out.DataCenter,
+		Country:        out.Country,
+		Elapsed:        elapsed,
+		WantCount:      wantCount,
+		SpeedSeconds:   out.SpeedSeconds,
+		SpeedTarget:    out.SpeedTarget,
+		SpeedSourceISP: out.SpeedSourceISP,
+		SpeedHint:      out.SpeedHint,
 	}
 	if out.IP != "" && out.Port > 0 {
 		result.Address = net.JoinHostPort(out.IP, strconv.Itoa(out.Port))

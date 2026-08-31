@@ -173,11 +173,23 @@
         <div class="hint sub">
           留空用 cloudflare.com。填你节点的域名可让结果更贴近实际；填错会导致全部测不通。
         </div>
-        <input type="text" id="speedURL" class="wide" style="margin-top:8px"
-               placeholder="自定义测速地址，例如 your.domain.com/files/100mb.bin">
-        <div class="hint sub">
-          留空则用公共镜像站测速 —— 那测的是别人域名的速度，和你自己节点的实际速度可能差很远。
-          填你自己域名下的一个大文件（100MB 以上）才最准。必须带文件路径。
+        <!-- 测速源。这是「优选很快、实际很慢」的头号原因：旧版固定拿公共
+             镜像站的静态大文件测速，那条链路和用户自己的节点无关，而且运营商
+             （尤其移动国际出口）对不同域名的限速策略差别很大。 -->
+        <div class="row" style="margin-top:10px">
+          <label class="lbl">测速源</label>
+          <div class="chips" id="chipSpeedSource"></div>
+        </div>
+        <div class="hint sub" id="speedSourceHint">
+          自动选择：先探测你的运营商，移动线路会换用对移动更友好的测速源。
+        </div>
+        <div id="speedURLBox" style="display:none">
+          <input type="text" id="speedURL" class="wide" style="margin-top:8px"
+                 placeholder="例如 your.domain.com/files/100mb.bin">
+          <div class="hint sub">
+            填你自己域名下的一个大文件（100MB 以上），测出来的才是
+            「CF 边缘回源到你服务器」这条实际会用的链路的速度。必须带文件路径。
+          </div>
         </div>
         <!-- 测速时长：默认 5 秒会整段落在运营商「突发不限速」窗口里，
              测出来比持续可用带宽高得多，于是「优选很快、实际用起来很慢」。
@@ -224,6 +236,7 @@
            「优选很快、实际很慢」这个问题就永远查不下去 -->
       <div class="kv"><div class="k">测速时长</div><div class="v" id="rSpeedSecs">-</div></div>
       <div class="kv"><div class="k">测速地址</div><div class="v" id="rSpeedTarget">-</div></div>
+      <div class="kv"><div class="k">检测运营商</div><div class="v" id="rSpeedISP">-</div></div>
     </div>
     <div class="ipbox">
       <code id="rIP">-</code>
@@ -325,8 +338,7 @@ document.querySelectorAll('#segSpeedSeconds button').forEach(b=>{
 document.querySelectorAll('#segTLS button').forEach(b=>{
   b.onclick=()=>{
     if(b.disabled) return;
-    document.querySelectorAll('#segTLS button').forEach(x=>x.classList.remove('on'));
-    b.classList.add('on'); useTLS = b.dataset.t === '1';
+    document.querySelectorAll('#segTLS button').forEach(x=>x.classList.remove('on'));    b.classList.add('on'); useTLS = b.dataset.t === '1';
     // 端口集合跟着 TLS 模式变（80 系 vs 443 系）。已选的在新模式下
     // 不合法，留着会让扫描全灭，所以整个重建。
     renderPortChips();
@@ -385,6 +397,56 @@ function updatePortHint(){
   else el.textContent = '已选 ' + n + ' 个端口，候选数为单端口的 ' + n + ' 倍，会明显变慢';
 }
 
+// ---------- 测速源 ----------
+//
+// 标识与中文名都从 /api/meta 取，前端不硬编码 —— 两处各写一份，
+// 改一处忘另一处就会出现「界面能选、核心层不认」的档位。
+//
+// 默认 auto：让核心层探运营商挑源，绝大多数人不需要动。
+let speedSource = 'auto';
+let speedSourceIds = ['auto'];
+let speedSourceLabels = ['自动选择'];
+
+const SPEED_SOURCE_HINTS = {
+  auto:       '自动选择：先探测你的运营商，移动线路会换用对移动更友好的测速源。',
+  cloudflare: 'Cloudflare 官方测速端点，通用、稳定。',
+  cm:         '社区提供的测速端点，移动线路通常比官方源更接近实际速度。',
+  mobile:     '移动专属测速源，直接回 100MB 文件，适合移动宽带/流量卡。',
+  custom:     '用你自己的域名测速，测的是「CF 边缘回源到你服务器」这条实际会用的链路，最准。',
+};
+
+function renderSpeedSourceChips(){
+  const box = document.getElementById('chipSpeedSource');
+  box.innerHTML = '';
+  // 存的标识不在当前档位里（后端改过档位）时回到第一项
+  if(!speedSourceIds.includes(speedSource)) speedSource = speedSourceIds[0];
+
+  speedSourceIds.forEach((id,i)=>{
+    const b = document.createElement('button');
+    b.textContent = speedSourceLabels[i] || id;
+    if(id === speedSource) b.classList.add('on');
+    b.onclick = ()=>{
+      if(b.disabled) return;
+      // 单选：点已选中的那个不取消，否则会出现「一个都没选」的状态，
+      // 那时该用哪个源没有答案
+      speedSource = id;
+      renderSpeedSourceChips();
+      updateSpeedSourceHint();
+    };
+    box.appendChild(b);
+  });
+  updateSpeedSourceHint();
+}
+
+function updateSpeedSourceHint(){
+  document.getElementById('speedSourceHint').textContent =
+    SPEED_SOURCE_HINTS[speedSource] || SPEED_SOURCE_HINTS.auto;
+  // 只在选「手动输入」时露出地址输入框：平时露着一个空框，
+  // 用户会以为不填就不测速
+  document.getElementById('speedURLBox').style.display =
+    speedSource === 'custom' ? 'block' : 'none';
+}
+
 function renderRegionChips(){
   const box = document.getElementById('chipRegions');
   box.innerHTML = '';
@@ -433,7 +495,8 @@ function setBusy(on, label){
     .forEach(b=>b.disabled = on);
   document.getElementById('bw').disabled = on;
   // 扫描中锁掉筛选项：改了也不会生效，留着可点会误导
-  document.querySelectorAll('#chipPorts button,#chipRegions button').forEach(b=>b.disabled = on);
+  document.querySelectorAll('#chipPorts button,#chipRegions button,#chipSpeedSource button')
+    .forEach(b=>b.disabled = on);
   document.getElementById('countriesExtra').disabled = on;
   document.getElementById('sni').disabled = on;
   document.getElementById('speedURL').disabled = on;
@@ -446,13 +509,22 @@ document.getElementById('btnScan').onclick = async ()=>{
   if(bw > 1000) bw = 1000;   // 与核心层 maxBandwidthMbps 一致
   el.value = bw;
 
+  const speedURL = document.getElementById('speedURL').value.trim();
+  // 选了手动输入却没填地址：后端会直接报错停下，与其让用户等一轮扫描
+  // 再看到红字，不如现在就说清楚
+  if(speedSource === 'custom' && !speedURL){
+    toast('请先填写测速地址，或把测速源改回「自动选择」');
+    return;
+  }
+
   const r = await fetch('/api/scan',{
     method:'POST', headers:{'Content-Type':'application/json'},
     body: JSON.stringify({
       v4: useV4, useTLS: useTLS, bandwidth: bw,
       count: wantCount,
       speedSeconds: speedSeconds,
-      speedURL: document.getElementById('speedURL').value.trim(),
+      speedSource: speedSource,
+      speedURL: speedURL,
       ports: Array.from(selectedPorts).join(','),
       countries: collectCountries(),
       sni: document.getElementById('sni').value.trim()
@@ -556,6 +628,7 @@ function showResult(r){
   document.getElementById('rTime').textContent  = r.elapsed ? r.elapsed+' 秒' : '-';
   document.getElementById('rSpeedSecs').textContent = r.speedSeconds ? r.speedSeconds+' 秒' : '-';
   document.getElementById('rSpeedTarget').textContent = r.speedTarget || '-';
+  document.getElementById('rSpeedISP').textContent = r.speedSourceISP || '-';
   renderMore(r.results);
 }
 
@@ -616,6 +689,17 @@ async function loadMeta(){
   if(m.httpPorts)  httpPorts  = m.httpPorts.split(',').map(Number).filter(Boolean);
   if(m.httpsPorts) httpsPorts = m.httpsPorts.split(',').map(Number).filter(Boolean);
   renderPortChips();
+  // 测速源同理。两个列表长度必须一致，否则按下标配对会把标识和显示名错开，
+  // 出现「选了 Cloudflare 实际用的是移动源」而且不报错
+  if(m.speedSources && m.speedSourceLabels){
+    const ids = m.speedSources.split(',').map(s=>s.trim()).filter(Boolean);
+    const labels = m.speedSourceLabels.split(',').map(s=>s.trim()).filter(Boolean);
+    if(ids.length && ids.length === labels.length){
+      speedSourceIds = ids;
+      speedSourceLabels = labels;
+      renderSpeedSourceChips();
+    }
+  }
   if(m.dataDir){
     document.getElementById('footHint').textContent =
       '点击地址可复制 · 数据目录 ' + m.dataDir;
@@ -626,6 +710,7 @@ async function loadMeta(){
 async function init(){
   renderRegionChips();
   renderPortChips();   // 先用默认端口渲染，loadMeta 拿到真实列表后会重渲
+  renderSpeedSourceChips();  // 同上：先渲染兜底的 auto 一项
   loadMeta();
   loadHist();
   const s = await fetch('/api/status').then(r=>r.json()).catch(()=>null);

@@ -54,6 +54,14 @@ public class MainActivity extends AppCompatActivity {
     private int speedSeconds = 5;
     /** 档位列表，下标与 segSpeedSeconds 的格子一一对应 */
     private java.util.List<Integer> speedSecondOptions = new java.util.ArrayList<>();
+
+    private FlowLayout layoutSpeedSource;
+    private TextView txtSpeedSourceHint;
+    private View boxSpeedURL;
+    /** 当前选中的测速源标识，取值来自 Better.speedSources() */
+    private String speedSource = "auto";
+    /** 标识列表，下标与 layoutSpeedSource 里的筹码一一对应 */
+    private java.util.List<String> speedSourceIds = new java.util.ArrayList<>();
     private EditText editSpeedURL;
     private Switch checkTLS;
     private EditText editBandwidth;
@@ -131,6 +139,7 @@ public class MainActivity extends AppCompatActivity {
     private static final String PREFS_RESULT_COUNT = "result_count";
     private static final String PREFS_SPEED_SECONDS = "speed_seconds";
     private static final String PREFS_SPEED_URL = "speed_url";
+    private static final String PREFS_SPEED_SOURCE = "speed_source";
     // 折叠状态也要记：改过端口的人下次多半还想看到它
     private static final String PREFS_PORTS_OPEN = "ports_open";
     private static final String PREFS_REGIONS_OPEN = "regions_open";
@@ -169,6 +178,9 @@ public class MainActivity extends AppCompatActivity {
         txtCountHint = findViewById(R.id.txtCountHint);
         segSpeedSeconds = findViewById(R.id.segSpeedSeconds);
         txtSpeedSecondsHint = findViewById(R.id.txtSpeedSecondsHint);
+        layoutSpeedSource = findViewById(R.id.layoutSpeedSource);
+        txtSpeedSourceHint = findViewById(R.id.txtSpeedSourceHint);
+        boxSpeedURL = findViewById(R.id.boxSpeedURL);
         editSpeedURL = findViewById(R.id.editSpeedURL);
         checkTLS = findViewById(R.id.checkTLS);
         editBandwidth = findViewById(R.id.editBandwidth);
@@ -304,6 +316,7 @@ public class MainActivity extends AppCompatActivity {
 
         buildCountOptions();
         buildSpeedSecondOptions();
+        buildSpeedSourceChips();
         setupCollapsibles();
 
         renderHistory();
@@ -447,6 +460,120 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
+    /**
+     * 测速源筹码。标识和中文名都来自核心层（{@link Better#speedSources()} /
+     * {@link Better#speedSourceLabels()}），不在界面里硬编码 —— 两处各写
+     * 一份就会出现「界面能选、核心层不认」的档位。
+     *
+     * <p>用单选筹码而不是 SegmentedBar：有 5 个选项且中文名长短不一，
+     * 分段条会挤成一条细缝。
+     *
+     * <p>为什么要有这个选项：测速源决定了速度数字有没有意义。旧版固定拿
+     * 公共镜像站的静态大文件测，那条链路和用户自己的节点无关，而且运营商
+     * （尤其移动国际出口）对不同域名的限速策略差别很大 —— 这正是
+     * 「优选很快、实际很慢」的头号原因。
+     */
+    private void buildSpeedSourceChips() {
+        if (layoutSpeedSource == null) return;
+
+        java.util.List<String> ids = parseCsv(Better.speedSources());
+        java.util.List<String> labels = parseCsv(Better.speedSourceLabels());
+        // 核心层没给或两个列表长度不一致时兜一个最小可用集：界面不能空白，
+        // 也不能按错位的下标把标识和显示名配对
+        if (ids.isEmpty() || ids.size() != labels.size()) {
+            ids = new java.util.ArrayList<>();
+            labels = new java.util.ArrayList<>();
+            ids.add("auto");
+            labels.add("自动选择");
+        }
+        speedSourceIds = ids;
+
+        // 存的标识在当前档位里不存在（降级安装、核心层改过档位）时回到第一项
+        if (!speedSourceIds.contains(speedSource)) {
+            speedSource = speedSourceIds.get(0);
+        }
+
+        layoutSpeedSource.removeAllViews();
+        for (int i = 0; i < speedSourceIds.size(); i++) {
+            final String id = speedSourceIds.get(i);
+            layoutSpeedSource.addView(makeChip(labels.get(i), id.equals(speedSource), sel -> {
+                // 单选：点已选中的那个不取消（否则会出现「一个都没选」的状态，
+                // 那时该用哪个源没有答案）。makeChip 已经把它翻成未选中了，
+                // syncSpeedSourceChips 负责按 speedSource 把选中态改回来。
+                if (!sel) {
+                    syncSpeedSourceChips();
+                    return false;
+                }
+                speedSource = id;
+                syncSpeedSourceChips();
+                updateSpeedSourceHint();
+                updateSpeedURLVisibility();
+                updateAdvancedSummary();
+                saveScanSettings();
+                return true;
+            }));
+        }
+        updateSpeedSourceHint();
+        updateSpeedURLVisibility();
+    }
+
+    /** 把筹码选中态与 speedSource 对齐（单选语义靠这个维持）。 */
+    private void syncSpeedSourceChips() {
+        if (layoutSpeedSource == null) return;
+        for (int i = 0; i < layoutSpeedSource.getChildCount() && i < speedSourceIds.size(); i++) {
+            layoutSpeedSource.getChildAt(i)
+                    .setSelected(speedSourceIds.get(i).equals(speedSource));
+        }
+    }
+
+    /** 测速源的说明文字。每个源为什么存在，都要能一句话说清。 */
+    private void updateSpeedSourceHint() {
+        if (txtSpeedSourceHint == null) return;
+        String text;
+        switch (speedSource) {
+            case "cloudflare":
+                text = "Cloudflare 官方测速端点，通用、稳定";
+                break;
+            case "cm":
+                text = "社区提供的测速端点，移动线路通常比官方源更接近实际速度";
+                break;
+            case "mobile":
+                text = "移动专属测速源，直接回 100MB 文件，适合移动宽带/流量卡";
+                break;
+            case "custom":
+                text = "用你自己的域名测速，测的是「CF 边缘回源到你服务器」这条实际会用的链路，最准";
+                break;
+            default:
+                text = "自动选择：先探测你的运营商，移动线路会换用对移动更友好的测速源";
+                break;
+        }
+        txtSpeedSourceHint.setText(text);
+    }
+
+    /** 只在选「手动输入」时露出地址输入框。 */
+    private void updateSpeedURLVisibility() {
+        if (boxSpeedURL == null) return;
+        boolean want = "custom".equals(speedSource);
+        // 平时露着一个空输入框，用户会以为不填就不测速；
+        // 用展开/收起动画而不是直接切 visibility，和折叠区的手感保持一致
+        if (want && boxSpeedURL.getVisibility() != View.VISIBLE) {
+            Anim.expand(boxSpeedURL);
+        } else if (!want && boxSpeedURL.getVisibility() == View.VISIBLE) {
+            Anim.collapse(boxSpeedURL);
+        }
+    }
+
+    /** 解析核心层给的字符串 CSV（如 "auto,cloudflare"），忽略空项。 */
+    private java.util.List<String> parseCsv(String csv) {
+        java.util.List<String> out = new java.util.ArrayList<>();
+        if (csv == null) return out;
+        for (String part : csv.split(",")) {
+            part = part.trim();
+            if (!part.isEmpty()) out.add(part);
+        }
+        return out;
+    }
+
     /** 解析核心层给的档位 CSV（如 "5,10,15"），忽略空项和非数字。 */
     private java.util.List<Integer> parseIntCsv(String csv) {
         java.util.List<Integer> out = new java.util.ArrayList<>();
@@ -537,9 +664,9 @@ public class MainActivity extends AppCompatActivity {
     /**
      * 高级选项收起时的摘要。
      *
-     * <p>三项按「影响结果可信度」排序显示：节点域名没填是最需要提醒的，
-     * 它决定了会不会挡掉「握手成功但一发数据就断」的 IP；测速地址其次；
-     * 测速时长总是显示，因为它一直在生效。
+     * <p>按「影响结果可信度」排序显示：节点域名没填是最需要提醒的，
+     * 它决定了会不会挡掉「握手成功但一发数据就断」的 IP；测速源其次，
+     * 它决定速度数字测的是谁的链路；测速时长总是显示，因为它一直在生效。
      */
     private void updateAdvancedSummary() {
         if (txtAdvancedSummary == null) return;
@@ -549,11 +676,30 @@ public class MainActivity extends AppCompatActivity {
         } else {
             parts.add("已填域名");
         }
-        if (!editSpeedURL.getText().toString().trim().isEmpty()) {
-            parts.add("自定义测速");
-        }
+        parts.add(speedSourceLabel());
         parts.add("测速 " + speedSeconds + " 秒");
         txtAdvancedSummary.setText(android.text.TextUtils.join(" · ", parts));
+    }
+
+    /**
+     * 摘要里显示的测速源名称。
+     *
+     * <p>选了「手动输入」但地址还没填时说「手动测速未填」而不是「手动输入」——
+     * 那种状态下点扫描会直接报错，摘要必须提前露出来。
+     */
+    private String speedSourceLabel() {
+        if ("custom".equals(speedSource)) {
+            if (editSpeedURL == null || editSpeedURL.getText().toString().trim().isEmpty()) {
+                return "手动测速未填";
+            }
+            return "自定义测速";
+        }
+        int idx = speedSourceIds.indexOf(speedSource);
+        java.util.List<String> labels = parseCsv(Better.speedSourceLabels());
+        if (idx >= 0 && idx < labels.size()) {
+            return labels.get(idx);
+        }
+        return "自动测速源";
     }
 
     private void toggleSection(View box, View arrow, String prefKey) {
@@ -773,7 +919,15 @@ public class MainActivity extends AppCompatActivity {
         final String sni = editSNI.getText().toString().trim();
         final int count = resultCount;
         final int speedSecs = speedSeconds;
+        final String speedSrc = speedSource;
         final String speedURL = editSpeedURL.getText().toString().trim();
+
+        // 选了「手动输入」却没填地址：核心层会直接报错停下，与其让用户
+        // 等一轮扫描再看到红字，不如现在就说清楚。
+        if ("custom".equals(speedSrc) && speedURL.isEmpty()) {
+            showToast("请先填写测速地址，或把测速源改回「自动选择」");
+            return;
+        }
         editBandwidth.clearFocus();
         hideKeyboard(editBandwidth);
         saveScanSettings();
@@ -799,7 +953,7 @@ public class MainActivity extends AppCompatActivity {
         executor.execute(() -> {
             try {
                 String resultJson = Better.getIPs(v4, useTLS, bandwidth, ports, countries, sni, count,
-                        speedSecs, speedURL);
+                        speedSecs, speedSrc, speedURL);
                 mainHandler.post(() -> onScanResult(resultJson));
             } catch (Exception e) {
                 mainHandler.post(() -> showResult("扫描出错: " + e.getMessage()));
@@ -879,6 +1033,8 @@ public class MainActivity extends AppCompatActivity {
             // 「优选很快、实际很慢」这个问题就永远查不下去
             int speedSecs = json.optInt("speedSeconds", 0);
             String speedTarget = json.optString("speedTarget", "");
+            // 自动档探到的运营商：让用户看懂「为什么给我选了这个源」
+            String speedISP = json.optString("speedSourceISP", "");
             String scanTime = formatNow();
 
             // 复制的必须是带端口的完整地址：只给 IP 就是原来那个
@@ -895,7 +1051,8 @@ public class MainActivity extends AppCompatActivity {
                     + (country.isEmpty() ? "" : " (" + country + ")") + "\n"
                     + "总计用时: " + elapsed + " 秒"
                     + (speedSecs > 0 ? "\n测速时长: " + speedSecs + " 秒" : "")
-                    + (speedTarget.isEmpty() ? "" : "\n测速地址: " + speedTarget);
+                    + (speedTarget.isEmpty() ? "" : "\n测速地址: " + speedTarget)
+                    + (speedISP.isEmpty() ? "" : "\n检测运营商: " + speedISP);
 
             showStructuredResult(address, bandwidth, realBandwidth, maxSpeed, latencyMs,
                     dataCenter, country, elapsed);
@@ -1068,6 +1225,12 @@ public class MainActivity extends AppCompatActivity {
         // 默认 5 秒：与 v1.15 及以前行为一致，不给老用户改变默认结果
         speedSeconds = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
                 .getInt(PREFS_SPEED_SECONDS, 5);
+        // 默认 auto：让核心层探运营商挑源，绝大多数人不需要动这个
+        speedSource = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+                .getString(PREFS_SPEED_SOURCE, "auto");
+        if (speedSource == null || speedSource.trim().isEmpty()) {
+            speedSource = "auto";
+        }
 
         // 静默设置：这是从 prefs 恢复初值，不该触发"用户选择了"的回调，
         // 否则 onCreate 阶段就会往 prefs 回写一次
@@ -1179,6 +1342,7 @@ public class MainActivity extends AppCompatActivity {
                 .putInt(PREFS_RESULT_COUNT, resultCount)
                 .putInt(PREFS_SPEED_SECONDS, speedSeconds)
                 .putString(PREFS_SPEED_URL, editSpeedURL.getText().toString().trim())
+                .putString(PREFS_SPEED_SOURCE, speedSource)
                 .apply();
     }
 

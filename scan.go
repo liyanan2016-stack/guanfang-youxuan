@@ -183,63 +183,43 @@ const dataMaxAge = 24 * time.Hour
 // url.txt 内容格式不对（不含 "/"）时，原本两个变量会保持空串，
 // 测速 URL 拼成 "https:///"，所有 IP 测速全部归零而且没有任何提示。
 //
-// 用 cloudflaremirrors.com：Cloudflare 自家的公共镜像站，文件是几 GB
-// 的 ISO，测速预算内下载不完。不用 speed.cloudflare.com/__down ——
-// 那个端点只服务直连边缘节点，实测非直连访问一律 403。
-const (
-	fallbackSpeedTestDomain = "cloudflaremirrors.com"
-	fallbackSpeedTestFile   = "oracle/OL9/u1/x86_64/OracleLinux-R9-U1-x86_64-dvd.iso"
+// v1.19 起换成 Cloudflare 官方 __down 端点（见 speedsource.go）：它按需
+// 生成字节流，不吃边缘缓存、不会因上游改版失效。实测指定任意 CF IP
+// 访问都返回 200 —— 早前认为「只服务直连边缘节点、非直连一律 403」
+// 的结论已被推翻，那是当时测法有误。
+var (
+	fallbackSpeedTestDomain = "speed.cloudflare.com"
+	fallbackSpeedTestFile   = "__down?bytes=99999999"
 )
 
 // ----------------------- 自定义测速地址 -----------------------
 
-// userSpeedDomain / userSpeedFile 用户自己的测速地址，优先于 url.txt。
+// userSpeedDomain / userSpeedFile 本次扫描实际使用的测速地址。
 //
-// 为什么需要：默认测速地址是 url.txt 给的公共镜像（当前是
-// cloudflaremirrors.com 上的 Oracle Linux ISO）。那是别人的域名，
-// 边缘缓存命中率、CF 账户等级、有没有回源全都和用户自己的节点无关 ——
-// 测出 25 MB/s 说的是那个镜像站的速度，不是用户节点的速度。
-// 用户填自己的域名+大文件后，测速走的就是「CF 边缘 → 回源到他的服务器」
-// 这条实际会用到的链路，数字才有意义。
+// 由 cloudflareTest 在扫描开始前经 resolveSpeedSource 解析后写入，之后
+// 只读。为空表示回落到 url.txt 下发的地址（见 speedTestTarget）。
 //
-// 只在扫描开始前由 cloudflareTest 设置一次，之后只读，与 speedTestDomain
-// 的并发约定一致。
+// 为什么需要它：默认测速地址跟用户自己的节点毫无关系 —— 边缘缓存命中率、
+// CF 账户等级、有没有回源全都不同，测出 25 MB/s 说的是那个公共端点的
+// 速度。用户填自己的域名+大文件后，测速走的才是「CF 边缘 → 回源到他的
+// 服务器」这条实际会用到的链路。
 var (
 	userSpeedDomain string
 	userSpeedFile   string
+	// userSpeedIsCustom 本次测速地址是否来自用户手填。
+	//
+	// 必须和 userSpeedDomain 分开：v1.19 起内置测速源也会写
+	// userSpeedDomain，光看它非空已经无法区分「用户填的」和「我们选的」，
+	// 而诊断提示要据此决定说「你填的测速地址」还是「测速地址」。
+	userSpeedIsCustom bool
 )
 
-// parseSpeedURL 解析用户填写的测速地址，返回 (域名, 文件路径)。
-//
-// 接受 "https://a.com/b/big.bin"、"a.com/b/big.bin" 两种写法。
-// 必须带路径：只填域名的话拼出来是首页 HTML，几十 KB 就读完了，
-// 测出来的是个毫无意义的小数字。
-func parseSpeedURL(raw string) (string, string, error) {
-	s := strings.TrimSpace(raw)
-	if s == "" {
-		return "", "", nil
-	}
-	s = strings.TrimPrefix(s, "https://")
-	s = strings.TrimPrefix(s, "http://")
-	s = strings.TrimLeft(s, "/")
-
-	parts := strings.SplitN(s, "/", 2)
-	if len(parts) != 2 || parts[0] == "" || strings.TrimSpace(parts[1]) == "" {
-		return "", "", fmt.Errorf("测速地址要带文件路径，例如 your.domain.com/files/100mb.bin")
-	}
-	domain := parts[0]
-	// 域名里不该有这些：填成 "http://a.com" 少个斜杠、或者粘进了
-	// 带端口/查询串的怪地址时，早点说清楚比测完全是 0 好
-	if strings.ContainsAny(domain, " :?#") {
-		return "", "", fmt.Errorf("测速域名格式不对：%q", domain)
-	}
-	return domain, strings.TrimSpace(parts[1]), nil
-}
-
 // speedTestTarget 返回本次测速实际使用的域名与文件路径。
-// 用户填了自定义地址就用他的，否则用 url.txt 下发的公共地址。
+//
+// 只看域名非空：路径允许为空（speed.okl.abrdns.com 这类根路径就是大文件
+// 的源确实存在），拿路径判断会把这种地址误判成「没设置」。
 func speedTestTarget() (string, string) {
-	if userSpeedDomain != "" && userSpeedFile != "" {
+	if userSpeedDomain != "" {
 		return userSpeedDomain, userSpeedFile
 	}
 	return speedTestDomain, speedTestFile
@@ -257,9 +237,33 @@ type speedDiagnostics struct {
 	statusFails int
 	lastStatus  int
 	tooSmall    int
+
+	// rateLimited 累计 429 次数，consecutive429 是当前连续次数。
+	//
+	// 单独统计而不是混进 statusFails：429 说的是「你测得太频繁」，
+	// 和「地址填错了」是两回事，处置方式也不同 —— 前者要停下来等，
+	// 后者要改配置。
+	rateLimited    int
+	consecutive429 int
+	// tripped 连续 429 达到阈值，本次扫描的测速已提前收工
+	tripped bool
 }
 
 var speedDiag speedDiagnostics
+
+// speedRateLimitTrip 连续多少次 429 就停止继续测速。
+//
+// 为什么要停：CF 对测速端点有速率限制，触发后每个候选都会 429，
+// 继续测下去只是白等，而且会让限制窗口一直续期。3 次足以区分
+// 「偶发一次」和「已经被限了」。
+const speedRateLimitTrip = 3
+
+// speedTestGapMs 两次正式测速之间的间隔。
+//
+// 参考 CFData-WEB 的 1200ms。没有这个间隔时连测十几个候选很容易撞上
+// 速率限制，然后整轮报「未找到可用 IP」—— 明明 IP 是好的。
+// 代价是每个候选多等 1.2 秒，10 个候选多 12 秒，值得。
+const speedTestGapMs = 1200
 
 func (d *speedDiagnostics) reset() {
 	d.mu.Lock()
@@ -269,6 +273,9 @@ func (d *speedDiagnostics) reset() {
 	d.statusFails = 0
 	d.lastStatus = 0
 	d.tooSmall = 0
+	d.rateLimited = 0
+	d.consecutive429 = 0
+	d.tripped = false
 	d.mu.Unlock()
 }
 
@@ -278,11 +285,40 @@ func (d *speedDiagnostics) recordAttempt() {
 	d.mu.Unlock()
 }
 
+// recordStatus 记录一次非 200/206 的响应。
+// 429 单独计数并累加连续次数，其他状态码会打断连续计数。
 func (d *speedDiagnostics) recordStatus(code int) {
 	d.mu.Lock()
 	d.statusFails++
 	d.lastStatus = code
+	if code == http.StatusTooManyRequests {
+		d.rateLimited++
+		d.consecutive429++
+		if d.consecutive429 >= speedRateLimitTrip {
+			d.tripped = true
+		}
+	} else {
+		d.consecutive429 = 0
+	}
 	d.mu.Unlock()
+}
+
+// recordSuccess 记录一次成功的测速，清掉连续 429 计数。
+//
+// 必须有这个：否则「429、成功、429、成功、429」也会被判成连续三次，
+// 明明只是偶发限流。
+func (d *speedDiagnostics) recordSuccess() {
+	d.mu.Lock()
+	d.consecutive429 = 0
+	d.mu.Unlock()
+}
+
+// rateLimitTripped 是否已因连续限流而提前收工。
+// 测速循环每轮开头查它，命中就跳出，不再白测。
+func (d *speedDiagnostics) rateLimitTripped() bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.tripped
 }
 
 // recordTooSmall 记录「连上了、状态码也对，但内容小到测不出速度」。
@@ -296,7 +332,9 @@ func (d *speedDiagnostics) recordTooSmall() {
 // hint 返回一条面向用户的诊断提示，没有可说的就返回空串。
 func (d *speedDiagnostics) hint(custom bool) string {
 	d.mu.Lock()
-	attempts, statusFails, lastStatus, tooSmall := d.attempts, d.statusFails, d.lastStatus, d.tooSmall
+	attempts, statusFails := d.attempts, d.statusFails
+	lastStatus, tooSmall := d.lastStatus, d.tooSmall
+	tripped, rateLimited := d.tripped, d.rateLimited
 	d.mu.Unlock()
 
 	if attempts == 0 {
@@ -306,12 +344,23 @@ func (d *speedDiagnostics) hint(custom bool) string {
 	if custom {
 		where = "你填的测速地址"
 	}
+	// 限流优先说：它会让后面所有判断都失真，而且用户能立刻采取行动
+	if tripped {
+		return "测速地址触发了速率限制（HTTP 429），已提前结束测速。请等几分钟再试，或在高级选项里换一个测速源"
+	}
 	// 全都是状态码错误 = 地址本身有问题，不是 IP 的问题
 	if statusFails >= attempts {
+		if lastStatus == http.StatusTooManyRequests {
+			return "测速地址全部返回 HTTP 429（速率限制），请等几分钟再试或换一个测速源"
+		}
 		return fmt.Sprintf("%s全部返回 HTTP %d，请检查路径是否正确、文件是否可公开下载", where, lastStatus)
 	}
 	if tooSmall >= attempts {
 		return fmt.Sprintf("%s的文件太小，测速期内就下载完了，请换一个 100MB 以上的大文件", where)
+	}
+	// 有限流但没到阈值：速度数字可能偏低，得让用户知道
+	if rateLimited > 0 {
+		return fmt.Sprintf("有 %d 次测速被速率限制（HTTP 429），部分结果的速度可能偏低", rateLimited)
 	}
 	return ""
 }
@@ -807,10 +856,12 @@ func downloadAllData() {
 		return
 	}
 	content = strings.TrimSpace(content)
-	parts := strings.SplitN(content, "/", 2)
-	if len(parts) == 2 && parts[0] != "" && parts[1] != "" {
-		speedTestDomain = parts[0]
-		speedTestFile = parts[1]
+	// 用 parseSpeedURL 而不是手工切 "/"：url.txt 下发的地址也可能带
+	// 查询串或端口，手工切会把 "a.com/__down?bytes=1" 的查询串留在
+	// 路径里勉强能用，但 "a.com:8443/x" 就会把端口混进域名当 SNI 用。
+	if d, f, err := parseSpeedURL(content); err == nil && d != "" && f != "" {
+		speedTestDomain = d
+		speedTestFile = f
 	} else {
 		// 必须兜底。原本没有这个 else：url.txt 内容格式不对（不含 "/"、
 		// 空文件、被中间设备替换成错误页）时两个变量保持空串，测速 URL
@@ -1411,6 +1462,11 @@ func runSpeedTestSimple(ip string, port int, useTLS bool, target int, budget tim
 			}
 			return conn, err
 		},
+		// 必须禁压缩。否则 Go 会自动加 Accept-Encoding: gzip 并透明解压，
+		// totalBytes 数的是解压后的字节 —— 遇到可压缩内容（HTML、
+		// 未压缩的测试数据）速度会被虚高好几倍。
+		DisableCompression:  true,
+		TLSHandshakeTimeout: 5 * time.Second,
 	}
 	if useTLS {
 		transport.TLSClientConfig = &tls.Config{ServerName: testDomain}
@@ -1426,9 +1482,15 @@ func runSpeedTestSimple(ip string, port int, useTLS bool, target int, budget tim
 	if useTLS {
 		scheme = "https"
 	}
+	// 路径可能为空（speed.okl.abrdns.com 这类根路径就是大文件的源），
+	// 也可能自带查询串（__down?bytes=99999999），直接拼即可
 	testURL := fmt.Sprintf("%s://%s/%s", scheme, testDomain, testFile)
 
 	req, _ := http.NewRequestWithContext(scanCtx(), "GET", testURL, nil)
+	// 显式要求不压缩。DisableCompression 只是不自动加 gzip，
+	// 有些站点看到没有 Accept-Encoding 仍会主动压 —— 明确说 identity。
+	req.Header.Set("Accept-Encoding", "identity")
+	req.Header.Set("User-Agent", "Mozilla/5.0")
 	resp, err := client.Do(req)
 	if err != nil {
 		return 0, 0, ""
@@ -1465,15 +1527,71 @@ func runSpeedTestSimple(ip string, port int, useTLS bool, target int, budget tim
 	e := &ewmaRate{}
 	sliceStart := dlStart
 
+	// Read 放到独立 goroutine，主循环用 select 等结果 —— 这样预算才是
+	// 硬边界。
+	//
+	// 之前是在主循环里直接 Read，读完一次才检查预算：一个半死的连接
+	// （TCP 通、TLS 握手过、但数据一个字节都不来）能把这次 Read 挂到
+	// client.Timeout（预算+3 秒）。选 15 秒预算时最坏 18 秒卡在一个
+	// 候选上，一轮 10 个候选就是三分钟。现在超时立刻返回，连接由
+	// readerCancel + Body.Close 收掉。
+	type readChunk struct {
+		n   int
+		err error
+	}
+	chunks := make(chan readChunk, 16)
+	readerCtx, readerCancel := context.WithCancel(context.Background())
+	readerDone := make(chan struct{})
+	go func() {
+		defer close(readerDone)
+		for {
+			n, err := resp.Body.Read(buf)
+			select {
+			case chunks <- readChunk{n: n, err: err}:
+			case <-readerCtx.Done():
+				return
+			}
+			if err != nil {
+				return
+			}
+		}
+	}()
+	// 无论从哪个分支退出都要收干净：先取消 reader，再关 Body 打断
+	// 阻塞中的 Read，最后等 goroutine 真正退出。顺序反了会漏 goroutine。
+	defer func() {
+		readerCancel()
+		resp.Body.Close()
+		<-readerDone
+	}()
+
+	// 预算硬上限。到点无论 Read 是否返回都收工。
+	deadline := time.NewTimer(budget)
+	defer deadline.Stop()
+
 	for {
-		n, err := resp.Body.Read(buf)
+		var n int
+		var readErr error
+		select {
+		case <-deadline.C:
+			// 预算到点：正常结束，把最后一个残片结算掉再退出
+			if secs := time.Since(sliceStart).Seconds(); secs > 0 && sliceBytes > 0 {
+				e.add(float64(sliceBytes) / secs)
+			}
+			goto done
+		case <-scanCtx().Done():
+			// 用户取消：不结算，直接走
+			goto done
+		case chunk := <-chunks:
+			n, readErr = chunk.n, chunk.err
+		}
+
 		totalBytes += int64(n)
 		sliceBytes += int64(n)
 
 		// 先结算时间片再判断错误：末尾那个不满一片的残片也要算进去，
 		// 否则整个下载在一片内结束时速度会算成 0。
 		elapsed := time.Since(sliceStart)
-		if elapsed >= timeSlice || err != nil {
+		if elapsed >= timeSlice || readErr != nil {
 			if secs := elapsed.Seconds(); secs > 0 && sliceBytes > 0 {
 				// 换算成每秒字节数再喂给 EWMA，
 				// 这样残片不会因为时间短而被低估
@@ -1483,14 +1601,14 @@ func runSpeedTestSimple(ip string, port int, useTLS bool, target int, budget tim
 			sliceStart = time.Now()
 		}
 
-		if err != nil {
+		if readErr != nil {
 			break
 		}
 
 		sinceStart := time.Since(dlStart)
 
-		// 预算用完就收工。不靠 client.Timeout 是因为那个超时会让
-		// Read 返回错误，而这里是正常结束，语义不同。
+		// 预算用完就收工。deadline 已经兜住了，这里再判一次是因为
+		// 数据来得快时可能一直有 chunk 可读，select 会优先随机挑分支。
 		if sinceStart >= budget {
 			break
 		}
@@ -1514,9 +1632,14 @@ func runSpeedTestSimple(ip string, port int, useTLS bool, target int, budget tim
 		}
 	}
 
+done:
 	if totalBytes == 0 {
 		return 0, tcpMs, dataCenter
 	}
+
+	// 有数据下来就算一次成功：清掉连续 429 计数，
+	// 否则「429、成功、429、成功、429」会被误判成连续三次限流
+	speedDiag.recordSuccess()
 
 	// 内容小到预算内就下完了：算出来的速度只反映一次突发。记一笔诊断，
 	// 好在收尾时告诉用户「换个大文件」，而不是让他对着一堆 0 猜原因。
@@ -1607,6 +1730,12 @@ func speedTestRound(cands []RTTResult, useTLS bool, target int, wantCount int,
 			if isCancelled() {
 				return testOutcome{}, true
 			}
+			// 预筛阶段也会撞限流。撞上了就别把剩下的候选也白测一遍，
+			// 已有的粗测结果足够排序，测不到的按延迟顺序兜底。
+			if speedDiag.rateLimitTripped() {
+				setScanProgress("预筛触发速率限制，改用已有结果继续")
+				break
+			}
 			setScanProgress(fmt.Sprintf("快速预筛 %d/%d：%s:%d (延迟 %dms 抖动 %dms)",
 				i+1, len(cands), r.IP, r.Port, r.LatencyMs, r.JitterMs))
 			// target 传 0：预筛不做「达不到就放弃」的判断，
@@ -1644,6 +1773,26 @@ func speedTestRound(cands []RTTResult, useTLS bool, target int, wantCount int,
 	for i, r := range finalists {
 		if isCancelled() {
 			return testOutcome{}, true
+		}
+
+		// 已经连续撞限流：继续测只是白等，而且会让限制窗口一直续期。
+		// 收尾时 speedDiag.hint 会告诉用户「触发了速率限制」。
+		if speedDiag.rateLimitTripped() {
+			setScanProgress("测速触发速率限制，已停止继续测速")
+			break
+		}
+
+		// 候选之间留间隔，避开测速端点的速率限制。
+		//
+		// 第一个不等：那时还没发过请求，没有限流风险，白等 1.2 秒
+		// 只会让用户觉得卡住。用可取消的等待，否则「取消」要拖到
+		// 间隔结束才生效。
+		if i > 0 {
+			select {
+			case <-time.After(speedTestGapMs * time.Millisecond):
+			case <-scanCtx().Done():
+				return testOutcome{}, true
+			}
 		}
 
 		if wantCount > 1 {
@@ -1776,6 +1925,12 @@ type testOutcome struct {
 	// 光看「未找到」猜不出原因，把用了什么地址回显出来最省事。
 	SpeedTarget string
 
+	// SpeedSourceISP 自动档探测到的 AS 组织名。
+	//
+	// 回显是为了让用户看懂「为什么自动档给我选了移动专属源」。
+	// 探测失败或非自动档时为空。
+	SpeedSourceISP string
+
 	// Results 按速度降序的全部结果（含 IP/Port/MaxSpeed 等字段）。
 	//
 	// 用户要 5 或 10 个结果时，第一个和 IP/Port/MaxSpeed 那几个顶层字段
@@ -1787,29 +1942,46 @@ type testOutcome struct {
 // cloudflareTest 核心测试逻辑
 //
 // speedSeconds 是正式测速的时长（秒），收敛到 allowedSpeedSeconds 里的档位。
-// customSpeedURL 是用户自定义测速地址，空则用 url.txt 下发的公共地址。
+// speedSource 是测速源标识（见 speedsource.go），空则按 auto 处理。
+// customSpeedURL 是用户手动填的测速地址，非空时优先于 speedSource。
 func cloudflareTest(ipType int, useTLS bool, taskNum int, speed int, filter scanFilter, sni string,
-	wantCount int, speedSeconds int, customSpeedURL string) testOutcome {
+	wantCount int, speedSeconds int, speedSource string, customSpeedURL string) testOutcome {
 	wantCount = normalizeResultCount(wantCount)
 	fullBudget := time.Duration(normalizeSpeedSeconds(speedSeconds)) * time.Second
 	pool := newResultPool(wantCount)
 	speedDiag.reset()
 
-	// 自定义测速地址要在 initLocations 之前落地：downloadAllData 会写
+	// 测速地址要在 initLocations 之前落地：downloadAllData 会写
 	// speedTestDomain/speedTestFile，而 testRTT 的默认 SNI 取自
 	// speedTestTarget() —— 先设好才能保证「验证的域名」和「测速的域名」
 	// 从第一次探测起就是同一个。
 	userSpeedDomain, userSpeedFile = "", ""
-	if strings.TrimSpace(customSpeedURL) != "" {
-		d, f, err := parseSpeedURL(customSpeedURL)
-		if err != nil {
-			// 填错了就直接停，不要拿默认地址悄悄跑完 —— 那样用户会以为
-			// 测的是自己的域名，拿到一个和实际使用无关的速度。
-			setProgress("测速地址无效：" + err.Error())
-			return testOutcome{SpeedHint: err.Error()}
+	userSpeedIsCustom = strings.TrimSpace(customSpeedURL) != ""
+
+	// 自动档先探 ISP：移动线路换用对移动友好的测速源。探测失败不影响
+	// 扫描，refreshAutoSpeedSource 内部会回落 Cloudflare 官方端点。
+	var autoISP string
+	if strings.TrimSpace(customSpeedURL) == "" {
+		src := strings.ToLower(strings.TrimSpace(speedSource))
+		if src == "" || src == SpeedSourceAuto {
+			setProgress("正在探测网络运营商，为你挑选测速源...")
+			if _, isp, err := refreshAutoSpeedSource(scanCtx()); err == nil {
+				autoISP = isp
+			}
+			if isCancelled() {
+				return testOutcome{}
+			}
 		}
-		userSpeedDomain, userSpeedFile = d, f
 	}
+
+	d, f, err := resolveSpeedSource(speedSource, customSpeedURL)
+	if err != nil {
+		// 地址填错就直接停，不要拿默认地址悄悄跑完 —— 那样用户会以为
+		// 测的是自己的域名，拿到一个和实际使用无关的速度。
+		setProgress("测速地址无效：" + err.Error())
+		return testOutcome{SpeedHint: err.Error()}
+	}
+	userSpeedDomain, userSpeedFile = d, f
 
 	initLocations()
 	markScanStart()
@@ -1962,7 +2134,7 @@ func cloudflareTest(ipType int, useTLS bool, taskNum int, speed int, filter scan
 			out.RoundsRun = round
 			out.Tested = sampler.used()
 			out.PoolSize = sampler.total()
-			annotateSpeedInfo(&out, fullBudget)
+			annotateSpeedInfo(&out, fullBudget, autoISP)
 			return out
 		}
 		// 子网刚好取完，没有下一批可测，不必再走剩下的轮次
@@ -1998,7 +2170,7 @@ func cloudflareTest(ipType int, useTLS bool, taskNum int, speed int, filter scan
 				roundsRun, best.IP, best.Port, best.MaxSpeed))
 		}
 	}
-	annotateSpeedInfo(&best, fullBudget)
+	annotateSpeedInfo(&best, fullBudget, autoISP)
 	return best
 }
 
@@ -2006,14 +2178,22 @@ func cloudflareTest(ipType int, useTLS bool, taskNum int, speed int, filter scan
 //
 // 单独一个函数是因为 cloudflareTest 有两条返回路径（达标提前返回、
 // 轮次用尽兜底返回），漏填一条就会出现「有时有提示、有时没有」。
-func annotateSpeedInfo(out *testOutcome, fullBudget time.Duration) {
+//
+// autoISP 是自动档探测到的 AS 组织名，非自动档或探测失败时为空。
+func annotateSpeedInfo(out *testOutcome, fullBudget time.Duration, autoISP string) {
 	out.SpeedSeconds = int(fullBudget / time.Second)
 	d, f := speedTestTarget()
 	if d != "" {
-		out.SpeedTarget = d + "/" + f
+		// 路径可能为空（根路径就是大文件的源），此时不留个光秃秃的斜杠
+		if f == "" {
+			out.SpeedTarget = d
+		} else {
+			out.SpeedTarget = d + "/" + f
+		}
 	}
+	out.SpeedSourceISP = autoISP
 	if out.SpeedHint == "" {
-		out.SpeedHint = speedDiag.hint(userSpeedDomain != "")
+		out.SpeedHint = speedDiag.hint(userSpeedIsCustom)
 	}
 }
 

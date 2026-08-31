@@ -99,8 +99,11 @@ const (
 // 单次失败就返回空（判为 unknown 而非 mismatched），由调用方降级处理。
 func probeColo(ip string, port int, useTLS bool, sni string) (string, int) {
 	if sni == "" {
-		if speedTestDomain != "" {
-			sni = speedTestDomain
+		// 用 speedTestTarget() 而不是直接读 speedTestDomain：本次测速
+		// 实际用的域名可能来自内置测速源或用户手填，探 colo 要和测速
+		// 用同一个域名，否则「能探通」和「能测速」是两回事。
+		if d, _ := speedTestTarget(); d != "" {
+			sni = d
 		} else {
 			sni = "cloudflare.com"
 		}
