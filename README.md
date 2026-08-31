@@ -1,7 +1,3 @@
-<img width="600" height="1400" alt="YULAN1" src="https://github.com/user-attachments/assets/b0647dfe-a08a-4b5b-ba18-9db4df5cd891" />
-
-<img width="600" height="1400" alt="YULAN2" src="https://github.com/user-attachments/assets/d5ac4c1e-23db-4de3-bc0b-ffa2be595b1c" />
-
 # 官方优选
 
 Cloudflare 官方 IP 段优选工具（Android + Windows/Linux）。
@@ -10,13 +6,39 @@ Cloudflare 官方 IP 段优选工具（Android + Windows/Linux）。
 
 > 第一次用看 [使用教程.md](使用教程.md)｜每版改了什么看 [更新日志.md](更新日志.md)
 
+<!--
+  两张截图并排。
+  用 table 而不是把两个 <img> 摞在一起：GitHub 渲染 Markdown 时会把
+  连续的图片各占一行，宽度写多少都不影响换行。表格是唯一能在 README 里
+  可靠并排的手段（GitHub 的 CSS 沙箱不认 flex、float、display 这些内联样式）。
+
+  宽度写在 <img width> 上，改这个数就能调尺寸；高度留空让它按原图比例
+  （1264×2800）自适应，写死高度会把截图压变形。
+  align="top" 让两张图顶部对齐 —— 一张有结果卡片、一张没有，
+  内容高度不一样，默认底部对齐会错位。
+-->
+<table>
+  <tr>
+    <td align="center" width="50%">
+      <img width="330" alt="扫描前的参数界面"
+           src="https://github.com/user-attachments/assets/b0647dfe-a08a-4b5b-ba18-9db4df5cd891" />
+      <br /><sub>扫描参数</sub>
+    </td>
+    <td align="center" width="50%">
+      <img width="330" alt="扫描完成后的结果界面"
+           src="https://github.com/user-attachments/assets/d5ac4c1e-23db-4de3-bc0b-ffa2be595b1c" />
+      <br /><sub>扫描结果</sub>
+    </td>
+  </tr>
+</table>
+
 ## 下载
 
 到 [Releases](../../releases) 页下载：
 
-- **Android**：`guanfang-youxuan-v1.21-universal.apk`（通用）或 `-arm64-v8a.apk`（2016 年后的手机，省一半空间）
-- **Windows**：`guanfang-youxuan-v1.21-windows-amd64.exe`
-- **Linux**：`guanfang-youxuan-v1.21-linux-amd64`
+- **Android**：`guanfang-youxuan-v1.22-universal.apk`（通用）或 `-arm64-v8a.apk`（2016 年后的手机，省一半空间）
+- **Windows**：`guanfang-youxuan-v1.22-windows-amd64.exe`
+- **Linux**：`guanfang-youxuan-v1.22-linux-amd64`
 
 APK 只申请 `INTERNET` 一个权限，没有后台服务、没有开机自启。
 
