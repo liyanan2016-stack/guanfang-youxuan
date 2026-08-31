@@ -123,6 +123,7 @@ public class MainActivity extends AppCompatActivity {
     private View navScan;
     private View navHistory;
     private TextView txtPageTitle;
+    private TextView txtVersion;
     /** 0=优选（参数+扫描+结果） 1=历史。 */
     private int currentTab = 0;
     private View layoutProgress;
@@ -254,6 +255,8 @@ public class MainActivity extends AppCompatActivity {
         navScan = findViewById(R.id.navScan);
         navHistory = findViewById(R.id.navHistory);
         txtPageTitle = findViewById(R.id.txtPageTitle);
+        txtVersion = findViewById(R.id.txtVersion);
+        setupVersionLabel();
         // 导航项：按住整块变暗缩小，切换成功后图标再弹一下。
         // 只做点击后回弹的话，按住不放期间毫无反馈。
         Anim.attachPressScale(0.94f, navScan, navHistory);
@@ -605,6 +608,92 @@ public class MainActivity extends AppCompatActivity {
             }
         }
         return out;
+    }
+
+    /**
+     * 顶栏版本号。
+     *
+     * <p>版本号取自 {@code PackageManager} 而不是写死在布局里 —— 写死的那份
+     * 必然会忘了跟 build.gradle 一起改，然后界面显示 v1.19 而实际是 v1.20，
+     * 排查问题时反而添乱。
+     *
+     * <p>点一下弹详情：外壳版本、versionCode、核心库版本。核心库版本单独存在
+     * 是因为 Android 外壳和 Go 核心是两套独立版本号，理论上可能不一致
+     * （比如只重打了包没重编 .aar），出问题时需要分别确认。
+     */
+    private void setupVersionLabel() {
+        if (txtVersion == null) return;
+
+        String appVer = "?";
+        long code = 0;
+        try {
+            android.content.pm.PackageInfo pi = getPackageManager()
+                    .getPackageInfo(getPackageName(), 0);
+            appVer = pi.versionName;
+            code = android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P
+                    ? pi.getLongVersionCode() : pi.versionCode;
+        } catch (android.content.pm.PackageManager.NameNotFoundException e) {
+            // 拿不到自己的包信息属于不该发生的情况，但不值得为此崩掉
+        }
+        txtVersion.setText("v" + appVer);
+
+        final String finalVer = appVer;
+        final long finalCode = code;
+        txtVersion.setOnClickListener(v -> {
+            String libVer;
+            try {
+                libVer = Better.version();
+            } catch (Throwable t) {
+                // 核心库没加载成功时不该让「看版本」这个动作崩掉，
+                // 而且这本身就是有用的信息
+                libVer = "未加载";
+            }
+            new android.app.AlertDialog.Builder(this)
+                    .setTitle("官方优选 v" + finalVer)
+                    .setMessage("应用版本：" + finalVer + "（build " + finalCode + "）\n"
+                            + "核心库版本：" + libVer + "\n\n"
+                            + "Cloudflare 官方 IP 段优选工具。\n"
+                            + "只测连通性与下载速度，不含任何代理功能。\n"
+                            + "名字里的「官方」指数据源是 Cloudflare 官方公布的\n"
+                            + "IP 段，与 Cloudflare 公司无关。\n\n"
+                            + getString(R.string.credits_body))
+                    // 三个按钮而不是三个入口控件：顶栏已经挤了「更新数据」和主题
+                    // 切换，再塞两个图标会把标题压掉。使用说明和更新日志都是
+                    // 「偶尔看一次」的东西，多点一下无所谓。
+                    .setNeutralButton("使用说明",
+                            (d, w) -> showTextDialog("使用说明", R.string.help_body))
+                    .setNegativeButton("更新日志",
+                            (d, w) -> showTextDialog("更新日志", R.string.changelog_body))
+                    .setPositiveButton("知道了", null)
+                    .show();
+        });
+    }
+
+    /**
+     * 弹一段可滚动的长文本。
+     *
+     * <p>不用 AlertDialog 自带的 message：它超过一屏时在部分 ROM 上不给滚动条，
+     * 更新日志和使用说明都是几十行，直接用会看不到后半截。所以自己塞一个
+     * ScrollView + TextView 当 view。
+     */
+    private void showTextDialog(String title, int bodyRes) {
+        TextView body = new TextView(this);
+        body.setText(getString(bodyRes));
+        body.setTextSize(14f);
+        body.setTextColor(getColor(R.color.text_primary));
+        body.setLineSpacing(0f, 1.25f);
+        int pad = dp(20);
+        body.setPadding(pad, dp(8), pad, dp(8));
+        body.setTextIsSelectable(true);
+
+        android.widget.ScrollView sv = new android.widget.ScrollView(this);
+        sv.addView(body);
+
+        new android.app.AlertDialog.Builder(this)
+                .setTitle(title)
+                .setView(sv)
+                .setPositiveButton("关闭", null)
+                .show();
     }
 
     /**

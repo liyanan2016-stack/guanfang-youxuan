@@ -7,15 +7,17 @@ Cloudflare 官方 IP 段优选工具（Android + Windows/Linux 桌面版）。
 
 > **第一次用请看 [使用教程.md](使用教程.md)** —— 安装、参数怎么填、
 > 结果怎么读、以及为什么会一直提示「这批 IP 都存在 RTT 丢包」。
+>
+> 每版改了什么见 [更新日志.md](更新日志.md)。
 
 ## 下载
 
 到 [Releases](../../releases) 页下载：
 
-- **Android**：`guanfang-youxuan-v1.20-universal.apk`（通用，体积大）
-  或 `guanfang-youxuan-v1.20-arm64-v8a.apk`（2016 年后的手机，省一半空间）
-- **Windows**：`guanfang-youxuan-v1.20-windows-amd64.exe`
-- **Linux**：`guanfang-youxuan-v1.20-linux-amd64`
+- **Android**：`guanfang-youxuan-v1.21-universal.apk`（通用，体积大）
+  或 `guanfang-youxuan-v1.21-arm64-v8a.apk`（2016 年后的手机，省一半空间）
+- **Windows**：`guanfang-youxuan-v1.21-windows-amd64.exe`
+- **Linux**：`guanfang-youxuan-v1.21-linux-amd64`
 
 APK 只申请 `INTERNET` 一个权限，没有后台服务、没有开机自启、不读通讯录相册。
 
@@ -420,6 +422,22 @@ IPv6 切成 `/48`。
 **测速源本身也可能被限速。** 内置的三个源都是公共端点，短时间内反复扫描会撞
 HTTP 429，届时会提示「触发速率限制」并提前结束测速。想要完全可控的数字就用
 「手动输入」填自己域名下的大文件。
+
+## 鸣谢
+
+- **[股神](https://t.me/CF_NAT)** —— 测速源与优选思路。v1.19 的「CM提供」
+  （`cf.090227.xyz/__down`）与「移动专属」（`speed.okl.abrdns.com`）两档来自这条
+  线上长期积累的实践，也是「按运营商挑测速源」这个方向的出处。
+- **[PoemMisty/CFData-WEB](https://github.com/PoemMisty/CFData-WEB)** ——
+  按运营商分流测速源的具体做法。v1.19 的三源结构、探 `cf.json` 读
+  `asn` / `asOrganization` 判断中国移动、自动档的选源规则都参考了它。
+- **[cmliu/edgetunnel](https://github.com/cmliu/edgetunnel)** —— CF 边缘节点的
+  实际使用场景。端口选择（v1.2）、回源状态码校验（v1.7）这两项都是从「优选出来的
+  IP 拿去接节点却报 `closed pipe`」这类真实问题倒推出来的。
+- **Cloudflare** —— 公开的 IP 段数据。本项目与 Cloudflare, Inc. 无任何关联。
+
+上述项目与本项目代码独立，没有直接引用其源码；参考的是思路、数据源地址与判定
+口径。如有署名或许可上的疑问，开 issue 说明即可。
 
 ## 许可
 

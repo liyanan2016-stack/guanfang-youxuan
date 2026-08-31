@@ -40,15 +40,40 @@
         android:paddingEnd="18dp"
         android:paddingBottom="14dp">
 
-        <TextView
-            android:id="@+id/txtPageTitle"
+        <!-- 标题 + 版本号。版本必须露在外面：用户反馈问题时第一句话就是
+             「我用的哪个版本」，之前只能去系统设置里的应用信息看。
+             小字排在标题右侧而不是下面，省一行高度。 -->
+        <LinearLayout
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
-            android:text="官方优选"
-            android:textColor="@color/text_primary"
-            android:textSize="20sp"
-            android:textStyle="bold" />
+            android:baselineAligned="true"
+            android:gravity="bottom"
+            android:orientation="horizontal">
+
+            <TextView
+                android:id="@+id/txtPageTitle"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="官方优选"
+                android:textColor="@color/text_primary"
+                android:textSize="20sp"
+                android:textStyle="bold" />
+
+            <!-- 点一下弹版本详情（含核心库版本）。核心库版本单独存在是因为
+                 Android 外壳和 Go 核心是两套独立版本号，出问题时需要分别确认 -->
+            <TextView
+                android:id="@+id/txtVersion"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="7dp"
+                android:background="?android:attr/selectableItemBackground"
+                android:clickable="true"
+                android:focusable="true"
+                android:text="v1.21"
+                android:textColor="@color/text_secondary"
+                android:textSize="12sp" />
+        </LinearLayout>
 
         <!-- 更新数据放顶栏：它和具体参数无关，是「把官方子网列表拉下来」
              这个全局动作，原来夹在扫描配置标题行里容易被当成参数的一部分 -->

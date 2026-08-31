@@ -26,6 +26,32 @@
     border:1px solid rgba(56,189,248,.35);
   }
   .ver{font-size:11px;color:var(--muted);margin-left:auto}
+  /* 顶栏的三个文档入口。做成朴素的文字链而不是按钮：它们不是操作，
+     点了不改变任何状态，只是打开一段说明。 */
+  .navlink{
+    font-size:12px;color:var(--muted);background:none;border:0;
+    cursor:pointer;padding:4px 2px;text-decoration:underline;
+    text-underline-offset:3px;
+  }
+  .navlink:hover{color:var(--accent)}
+  /* 文档弹层。用 <dialog> 而不是自己搭遮罩：Esc 关闭、焦点陷阱、
+     背景不可点这几件事浏览器已经做好了。 */
+  dialog.doc{
+    background:var(--card);color:var(--fg);border:1px solid var(--line);
+    border-radius:14px;padding:0;max-width:620px;width:calc(100% - 32px);
+    max-height:78vh;
+  }
+  dialog.doc::backdrop{background:rgba(3,8,20,.66)}
+  dialog.doc header{
+    display:flex;align-items:center;gap:10px;margin:0;
+    padding:16px 20px;border-bottom:1px solid var(--line);
+  }
+  dialog.doc header h3{margin:0;font-size:15px;flex:1}
+  dialog.doc .body{
+    padding:16px 20px 20px;overflow:auto;max-height:calc(78vh - 60px);
+    font-size:13px;line-height:1.75;white-space:pre-wrap;
+  }
+  dialog.doc .body a{color:var(--accent)}
   .card{
     background:var(--card);border:1px solid var(--line);
     border-radius:14px;padding:18px;margin-bottom:16px;
@@ -122,6 +148,9 @@
     <h1>官方优选</h1>
     <span class="badge">桌面版</span>
     <span class="ver" id="ver"></span>
+    <button class="navlink" id="btnHelp">使用说明</button>
+    <button class="navlink" id="btnChangelog">更新日志</button>
+    <button class="navlink" id="btnAbout">关于</button>
   </header>
 
   <div class="card">
@@ -291,7 +320,90 @@
 
 <div class="toast" id="toast"></div>
 
+<!-- 三份文档。内容写死在页面里而不是从后端取：它们是纯静态文本，
+     走一趟 /api 只是给自己加个失败路径。与 Android 的 strings.xml
+     是两份拷贝，改一处要同步另一处。 -->
+<dialog class="doc" id="dlgDoc">
+  <header><h3 id="docTitle"></h3><button class="act ghost" id="btnDocClose">关闭</button></header>
+  <div class="body" id="docBody"></div>
+</dialog>
+
 <script>
+const DOC_HELP = `1. 第一次用先点「更新数据」
+没有子网列表扫不了，几秒钟的事。之后一个月更新一次就够。
+
+2. 期望带宽不知道填多少就填 1
+跑一次看「实测带宽」，再往上调。填超过你家宽带上限永远达不到，只会白等满 10 轮。
+
+3. 端口要选你节点实际用的那个
+选错会出现「工具说可用、接节点报 closed pipe」——工具验的是 443，你用的是 2053。
+
+4. 「这批 IP 都存在 RTT 丢包」是正常的
+候选 IP 是从子网随机拼的，大部分地址上没有服务，扫描就是在不停试错。
+
+5. 选了地区会明显变慢
+官方 IP 的落地机房只能测完才知道，筛得越窄命中率越低。慢不等于卡住，看进度里的秒数和轮次。
+
+6. 优选出来很快、实际用起来慢
+去「高级选项 → 测速源」换成「移动专属」或填自己域名的大文件，再把测速时长改成 10 或 15 秒。默认 5 秒会落在运营商的突发不限速窗口里，数字偏高。
+
+7. 结果和网络环境绑定
+换 WiFi、换运营商、过几小时都可能变。用时再扫，别指望扫一次用一年。
+
+桌面版专有：关掉那个黑色控制台窗口才算退出程序，只关浏览器标签服务还在跑。
+
+完整教程见项目仓库的「使用教程.md」。`;
+
+const DOC_CHANGELOG = `v1.21
+· 顶栏显示版本号，新增使用说明 / 更新日志 / 关于
+· 关于里补上鸣谢
+
+v1.20
+· 新增「指定 IP 段」：只扫你给的段，几十秒出结果
+· 支持 CIDR / 单 IP / 起止范围，边打边校验
+
+v1.19
+· 测速源可选：自动 / Cloudflare / CM提供 / 移动专属 / 手动
+· 自动档会探测运营商，移动线路换用更友好的源
+· 撞到 HTTP 429 会提示「触发速率限制」并提前结束
+
+v1.18
+· 节点域名、自定义测速地址、测速时长收进「高级选项」
+
+v1.17
+· 测速地址可自定义，且真正作用于 SNI 与连接目标
+· 测速时长可选 5 / 10 / 15 秒
+· 结果回显本次用的测速地址，速度数字来源不再是黑盒
+
+v1.16
+· 修「选地区后长时间停在第一轮」：窄地区侦察不再攒满一批才开测
+· 进度全程显示已用秒数、第几轮第几批、累计侦察数与命中率
+
+v1.15
+· 分段控件改滑动指示块，惯性撞到边界改为回弹（仅安卓）
+
+v1.13
+· 输出数量可选 1 / 5 / 10，多出来的进「备选地址」
+
+v1.7
+· 填了节点域名时校验回源状态码，拦掉 52x 回源不通的 IP
+
+v1.6
+· 选地区时先侦察子网落地机房，再优选
+
+v1.5
+· 测速只认 200/206，速度改 EWMA 平均，排序先看丢包率
+· 数据超过 24 小时自动更新`;
+
+const DOC_ABOUT_TAIL = `Cloudflare 官方 IP 段优选工具。只测连通性与下载速度，不含任何代理功能。
+名字里的「官方」指数据源是 Cloudflare 官方公布的 IP 段，与 Cloudflare 公司无关。
+
+鸣谢
+· 股神 — 测速源与优选思路（https://t.me/CF_NAT）
+· PoemMisty / CFData-WEB — 按运营商分流测速源的做法
+· cmliu / edgetunnel — CF 边缘节点使用场景
+· Cloudflare — 公开 IP 段数据`;
+
 let useV4 = true, useTLS = false, polling = null;
 
 function toast(msg){
@@ -772,7 +884,10 @@ async function loadHist(){
 async function loadMeta(){
   const m = await fetch('/api/meta').then(r=>r.json()).catch(()=>null);
   if(!m) return;
-  if(m.version) document.getElementById('ver').textContent = 'v' + m.version;
+  if(m.version){
+    document.getElementById('ver').textContent = 'v' + m.version;
+    coreVersion = m.version;
+  }
   // 端口列表从后端取，前端只负责渲染
   if(m.httpPorts)  httpPorts  = m.httpPorts.split(',').map(Number).filter(Boolean);
   if(m.httpsPorts) httpsPorts = m.httpsPorts.split(',').map(Number).filter(Boolean);
@@ -794,11 +909,35 @@ async function loadMeta(){
   }
 }
 
+// 顶栏三个文档入口。内容是纯文本，用 textContent 而不是 innerHTML ——
+// 不需要富文本，也就不需要给自己开一个注入口子。
+let coreVersion = '';
+
+function showDoc(title, body){
+  document.getElementById('docTitle').textContent = title;
+  document.getElementById('docBody').textContent = body;
+  const d = document.getElementById('dlgDoc');
+  // showModal 在旧浏览器上不存在，退化成 open 属性也能看
+  if(d.showModal) d.showModal(); else d.setAttribute('open','');
+}
+
+function setupDocs(){
+  document.getElementById('btnHelp').onclick = ()=> showDoc('使用说明', DOC_HELP);
+  document.getElementById('btnChangelog').onclick = ()=> showDoc('更新日志', DOC_CHANGELOG);
+  document.getElementById('btnAbout').onclick = ()=> showDoc('关于',
+    '版本：v' + (coreVersion || '?') + '（桌面版）\n\n' + DOC_ABOUT_TAIL);
+  document.getElementById('btnDocClose').onclick = ()=>{
+    const d = document.getElementById('dlgDoc');
+    if(d.close) d.close(); else d.removeAttribute('open');
+  };
+}
+
 // 页面可能在扫描进行中被刷新，先探一次状态再决定要不要接着轮询
 async function init(){
   renderRegionChips();
   renderPortChips();   // 先用默认端口渲染，loadMeta 拿到真实列表后会重渲
   renderSpeedSourceChips();  // 同上：先渲染兜底的 auto 一项
+  setupDocs();
   loadMeta();
   loadHist();
   const s = await fetch('/api/status').then(r=>r.json()).catch(()=>null);
